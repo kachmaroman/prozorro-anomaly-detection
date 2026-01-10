@@ -1,0 +1,24 @@
+# Data (too large for git)
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.idea/
+.vscode/
+
+# Results (regenerable)
+results/figures/
+results/metrics/
+
+# OS
+.DS_Store
+Thumbs.db
