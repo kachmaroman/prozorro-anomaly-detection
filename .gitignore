@@ -1,6 +1,9 @@
 # Data (too large for git)
 data/
 
+# Thesis documents (personal)
+thesis/
+
 # Python
 __pycache__/
 *.pyc
