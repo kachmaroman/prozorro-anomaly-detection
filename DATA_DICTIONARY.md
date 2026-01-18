@@ -1,11 +1,11 @@
-# Data Dictionary - Ukraine ProZorro Procurement Dataset
+# Data Dictionary - Ukraine Prozorro Procurement Dataset
 
 ## Overview
 
 This document describes all columns across the dataset files:
 - **4 tenders files** (tenders_2022.csv - tenders_2025.csv): 55 columns each
-- **4 bids files** (bids_2022.csv - bids_2025.csv): 6 columns each
-- **3 reference tables** (buyers.csv, suppliers.csv, bidders.csv): 16, 6, 8 columns respectively
+- **4 bids files** (bids_2022.csv - bids_2025.csv): 8 columns each
+- **3 reference tables** (buyers.csv, suppliers.csv, bidders.csv): 16, 6, 7 columns respectively
 
 ---
 
@@ -84,8 +84,6 @@ Derived from `published_date` for easier analysis.
 | procurement_method | string | Procurement procedure type | limited, open, selective | 0% |
 | main_procurement_category | string | Category of goods/services | goods, services, works | 0% |
 | award_criteria | string | Winner selection criteria | lowestCost, bestProposal, bestValueToGovernment | 0% |
-
-**Note:** Dataset contains only completed tenders (`status` column removed as redundant).
 
 **Procurement methods:**
 - `limited`: Simplified procurement (restricted competition)
@@ -189,18 +187,25 @@ These columns are **pre-aggregated** from the original awards data and included 
 
 Bidding information for all participants (not just winners).
 
-### Schema (6 columns)
+### Schema (8 columns)
 
 | Column | Type | Description | Missing % |
 |--------|------|-------------|-----------|
 | tender_id | string | Links to tenders table (FK) | 0% |
 | bid_id | string | Unique bid identifier | 0% |
-| bidder_id | string | Bidding organization ID (EDRPOU) | 5% |
+| bidder_id | string | Bidder EDRPOU code (can be linked to suppliers) | 0.5% |
 | bid_date | string (ISO 8601) | Bid submission date | 5% |
-| bid_status | string | Bid status (active, invalid, pending, etc.) | 0% |
+| bid_status | string | Bid status (valid, withdrawn, pending, disqualified) | 0% |
+| bid_amount | float | Bid value in UAH | 0.6% |
+| is_winner | integer | 1 if this bidder won the tender, 0 otherwise | 0% |
 | is_bidder_masked | integer | Data quality flag (1=masked) | 0% |
 
-**Use for:** Competition analysis, bidder behavior patterns.
+**Key features:**
+- `bid_amount`: Actual bid value submitted by participant
+- `is_winner`: Flag indicating if bidder won (matched by EDRPOU with award suppliers)
+- `bidder_id`: Real EDRPOU code — can be joined with `suppliers.supplier_id`
+
+**Use for:** Competition analysis, bidder behavior patterns, winner prediction, price analysis.
 
 ---
 
@@ -286,34 +291,23 @@ merged = tenders.merge(buyers, on='buyer_id', how='left', suffixes=('', '_buyer'
 
 ## Table: bidders.csv
 
-Bidder participation statistics across all years (2.6M unique bidders).
+Bidder participation statistics across all years (72K unique bidders).
 
-**IMPORTANT:** `bidder_id` is an **anonymized hash** (not EDRPOU) - cannot be linked to `supplier_id`. This means win metrics (win_count, win_rate) are impossible to calculate. For supplier win statistics, use `suppliers.csv` instead.
+**Note:** `bidder_id` is EDRPOU code — can be linked to `suppliers.supplier_id` for win statistics.
 
-### Schema (8 columns)
+### Schema (7 columns)
 
 | Column | Type | Description |
 |--------|------|-------------|
-| bidder_id | string | Anonymized bidder hash (PRIMARY KEY) |
+| bidder_id | string | Bidder EDRPOU code (PRIMARY KEY) |
 | total_bids | integer | Total number of bids submitted (2022-2025) |
 | unique_tenders | integer | Number of unique tenders participated in |
 | unique_buyers | integer | Number of unique buyers interacted with |
-| disqualified_bids_count | integer | Number of disqualified bids (fraud indicator) |
 | first_bid_date | string (ISO 8601) | Date of first bid |
 | last_bid_date | string (ISO 8601) | Date of last bid |
 | is_masked | integer | Data quality flag (1=masked) |
 
 **Sorted by:** `total_bids` descending.
-
-**Data insights:**
-- **99%+ of bidders** submit only 1 bid (explains low temporal variation)
-- **0.04%** have disqualified bids (potential fraud/corruption indicator)
-- Most bidders are one-time participants (low repeat activity)
-
-**Columns REMOVED** (optimization - 99%+ zeros):
-- `valid_bids_count`, `pending_bids_count`, `active_bids_count`, `invalid_bids_count`, `withdrawn_bids_count` (redundant or empty)
-- `activity_days`, `avg_bids_per_month` (99%+ are 0 due to single-bid pattern)
-- `withdrawal_rate` (duplicates `disqualified_bids_count > 0`)
 
 **Join with bids:**
 ```python
@@ -324,7 +318,13 @@ merged = bids.merge(bidders, on='bidder_id', how='left')
 print(merged[['bid_id', 'bidder_id', 'total_bids']])
 ```
 
-**Use for:** Identifying repeat bidders, fraud detection (disqualified_bids_count), bidder diversity analysis.
+**Join with suppliers (for win statistics):**
+```python
+suppliers = pd.read_csv('suppliers.csv')
+bidders_with_wins = bidders.merge(suppliers, left_on='bidder_id', right_on='supplier_id', how='left')
+```
+
+**Use for:** Identifying repeat bidders, bidder diversity analysis, competition patterns.
 
 ---
 
@@ -349,7 +349,7 @@ Missing values are represented as:
 **High missing % fields:**
 - `tender_start_date`, `tender_end_date`: 90% (not required for all procurement types)
 - `award_period_start/end`: 93% (optional fields)
-- `supplier_region`: 84% (data quality issue in ProZorro system)
+- `supplier_region`: 84% (data quality issue in Prozorro system)
 
 ---
 
@@ -388,19 +388,19 @@ full = (tenders
 ## Relationships
 
 ```
-buyers (34K)
+buyers (36K)
     └─ buyer_id (PK)
            ↓ (1:many)
     tenders (13M)
         ├─ tender_id (PK)
         │     ↓ (1:many)
-        │  awards (12M)
-        │     ↓ (1:many)
-        │  bids (1.9M)
+        │  bids (2.6M)
         │
         └─ supplier_id (FK)
                ↓ (many:1)
-    suppliers (341K)
+    suppliers (359K)
+           ↑
+    bidders (72K) ── bidder_id = supplier_id (EDRPOU)
 ```
 
 ---
@@ -458,22 +458,21 @@ tenders.groupby('year')['is_single_bidder'].mean() * 100
 
 ## Version Information
 
-- **Dataset Version:** 1.0 (Clean)
+- **Dataset Version:** 1.1 (Clean)
 - **Last Updated:** January 2026
 - **Coverage:** January 2022 - December 2025
 - **Records:** 13,096,411 tenders (completed only)
-- **Filtering:** 719,949 tenders removed (unsuccessful, active, cancelled statuses)
-- **Source:** ProZorro (prozorro.gov.ua)
+- **Source:** Prozorro (prozorro.gov.ua)
 
 ---
 
 ## Questions?
 
 For questions about specific fields or data quality issues, please:
-1. Check ProZorro documentation: https://prozorro.gov.ua
+1. Check Prozorro documentation: https://prozorro.gov.ua
 2. Review OCDS standard: https://standard.open-contracting.org
 3. Open discussion on Kaggle dataset page
 
 ---
 
-**Happy analyzing! 🇺🇦**
+**See also:** README.md for dataset overview and quick start guide.
