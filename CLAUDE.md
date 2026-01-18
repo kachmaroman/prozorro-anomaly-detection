@@ -22,7 +22,7 @@ master-thesis/
 
 ## Data Location
 
-Dataset is in `data/` folder (~5.5 GB):
+Dataset is in `data/` folder (~5.3 GB):
 
 **Tenders (year-based):**
 - `tenders_2022.csv` - 2.4M tenders
@@ -37,9 +37,9 @@ Dataset is in `data/` folder (~5.5 GB):
 - `bids_2025.csv` - 1.1M bids
 
 **Reference tables:**
-- `buyers.csv` - 37K buyers (16 columns)
-- `suppliers.csv` - 361K suppliers (6 columns)
-- `bidders.csv` - 2.6M bidders (8 columns)
+- `buyers.csv` - 36K buyers (16 columns)
+- `suppliers.csv` - 359K suppliers (6 columns)
+- `bidders.csv` - 72K bidders (7 columns)
 
 ## Key Concept: Information Portrait
 
@@ -139,4 +139,4 @@ Dataset is in `data/` folder (~5.5 GB):
 - jupyter - notebooks
 
 ---
-Last updated: 2026-01-16
+Last updated: 2026-01-18
