@@ -1,0 +1,81 @@
+{
+  "title": "Prozorro Ukraine Procurement 2022-2025",
+  "id": "romankachmar/prozorro-ukraine-procurement-2022-2025",
+  "licenses": [
+    {
+      "name": "CC0-1.0"
+    }
+  ],
+  "keywords": [
+    "ukraine",
+    "procurement",
+    "public data",
+    "government",
+    "transparency",
+    "corruption detection",
+    "war",
+    "economics",
+    "tenders",
+    "bidding",
+    "business"
+  ],
+  "collaborators": [],
+  "data": [],
+  "subtitle": "13.1M+ completed public procurement tenders from Ukraine's Prozorro system",
+  "description": "# Prozorro Ukrainian Public Procurement Dataset (2022-2025)\n\n## Overview\n\nComprehensive dataset of Ukrainian public procurement tenders from the **Prozorro** electronic procurement system, covering the period from **January 1, 2022 to December 31, 2025** - including both pre-war period and the full duration of the Russian invasion.\n\n**Prozorro** (meaning \"Transparently\" in Ukrainian) is Ukraine's revolutionary public e-procurement system launched in 2016 to combat corruption and increase transparency in government spending.\n\n## Dataset Highlights\n\n- **13.1+ million completed tenders** across 4 years (2022-2025)\n- **361K suppliers** and **37K buyers** (government entities)\n- **2.6M bids** from competitive procedures\n- **Includes pre-war baseline** (Jan-Feb 2022) for comparative analysis\n- **Normalized relational structure** for easy analysis\n- **Year-based file splits** for memory-efficient analysis\n\n## What's Inside\n\n### Core Tables\n- `tenders_YYYY.csv` - Tender details (55 columns, completed tenders only)\n- `bids_YYYY.csv` - Bid submissions with amounts and winner flag (8 columns)\n- `suppliers.csv` - Supplier profiles and statistics\n- `buyers.csv` - Government buyer profiles with competition metrics (16 columns)\n- `bidders.csv` - Bidder statistics with EDRPOU (7 columns)\n\n### Time Period\n- **Pre-war period**: Jan 1 - Feb 23, 2022 (~1.5 months baseline)\n- **War period**: Feb 24, 2022 - Dec 31, 2025 (~3.8 years)\n\n## Use Cases\n\n### Research Questions\n1. **War Impact Analysis**: How did the invasion affect public procurement?\n2. **Corruption Detection**: Identify anomalous patterns and red flags\n3. **Market Competition**: Analyze competitive vs non-competitive procedures\n4. **Regional Analysis**: Compare procurement across Ukrainian regions\n5. **Supplier Networks**: Detect collusion and cartels\n6. **Price Analysis**: Track market prices and discount patterns\n7. **Emergency Procurement**: Study rapid procurement during crisis\n\n### Machine Learning Applications\n- Fraud/anomaly detection\n- Price prediction\n- Supplier risk scoring\n- Bid success prediction\n- CPV classification\n- Time series forecasting\n\n## Data Quality\n\n- **No duplicates**: Filename-based deduplication across multiple crawls\n- **Validated schema**: All foreign keys verified, 0 orphan records\n- **Enriched metrics**: Pre-computed statistics for buyers and suppliers\n- **Masked sensitive data**: Military/security purchases anonymized\n- **Clean data**: Only completed tenders\n\n## Acknowledgments\n\n- Data source: **Prozorro** (https://prozorro.gov.ua/) - Ukraine's public e-procurement system\n- Data format: **OCDS** (Open Contracting Data Standard)\n- Collected via: **Kingfisher** data collection tool\n\n## Updates\n\nThis is a **static snapshot** covering 2022-2025. For live data, visit https://prozorro.gov.ua/\n",
+  "isPrivate": false,
+  "resources": [
+    {
+      "path": "tenders_2022.csv",
+      "description": "Tenders from 2022 (includes pre-war baseline: Jan-Feb)"
+    },
+    {
+      "path": "tenders_2023.csv",
+      "description": "Tenders from 2023"
+    },
+    {
+      "path": "tenders_2024.csv",
+      "description": "Tenders from 2024"
+    },
+    {
+      "path": "tenders_2025.csv",
+      "description": "Tenders from 2025"
+    },
+    {
+      "path": "bids_2022.csv",
+      "description": "Bid submissions from 2022"
+    },
+    {
+      "path": "bids_2023.csv",
+      "description": "Bid submissions from 2023"
+    },
+    {
+      "path": "bids_2024.csv",
+      "description": "Bid submissions from 2024"
+    },
+    {
+      "path": "bids_2025.csv",
+      "description": "Bid submissions from 2025"
+    },
+    {
+      "path": "suppliers.csv",
+      "description": "Supplier profiles and aggregated statistics"
+    },
+    {
+      "path": "buyers.csv",
+      "description": "Government buyer profiles with competition metrics"
+    },
+    {
+      "path": "bidders.csv",
+      "description": "Bidder statistics with EDRPOU (can join with suppliers)"
+    },
+    {
+      "path": "DATA_DICTIONARY.md",
+      "description": "Complete data dictionary with column descriptions"
+    },
+    {
+      "path": "README.md",
+      "description": "Dataset documentation and usage guide"
+    }
+  ]
+}

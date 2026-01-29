@@ -25,3 +25,5 @@ results/metrics/
 # OS
 .DS_Store
 Thumbs.db
+
+/methodology_plan.pdf
