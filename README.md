@@ -1,47 +1,67 @@
 # Anomaly Detection in Ukrainian Public Procurement
 
-Master's thesis project analyzing 13M+ ProZorro tenders for suspicious patterns and potential fraud.
+Analyzing 13M+ ProZorro tenders for suspicious patterns and potential fraud using rule-based and ML methods.
 
 ## Structure
 
 | Folder | Description |
 |--------|-------------|
-| `thesis/` | Academic documents (thesis PDF/DOCX) |
-| `notebooks/` | Jupyter notebooks for EDA and modeling |
-| `src/` | Python source code for models |
-| `results/` | Figures, metrics, experiment results |
-| `data/` | Dataset reference |
+| `notebooks/` | Jupyter notebooks for EDA and analysis |
+| `src/` | Python source code (detectors, data loaders) |
+| `results/` | Figures and exported anomalies |
+| `data/` | Dataset (download from Kaggle) |
 
 ## Dataset
 
-**Source:** ProZorro Ukrainian Public Procurement System
-**Period:** 2022-2025
-**Size:** 13.1M completed tenders, ~5.5 GB
+**Source:** [ProZorro Ukraine Procurement 2022-2025](https://www.kaggle.com/datasets/romankachmar/prozorro-ukraine-procurement-2022-2025)
+
+| File | Records |
+|------|---------|
+| `tenders_2022.csv` | 2.4M |
+| `tenders_2023.csv` | 3.6M |
+| `tenders_2024.csv` | 3.4M |
+| `tenders_2025.csv` | 3.7M |
+| `buyers.csv` | 36K |
+| `suppliers.csv` | 359K |
+
+Download and place in `data/` folder.
 
 ## Quick Start
 
 ```python
-import pandas as pd
+from src.data_loader import load_tenders, load_buyers
+from src.detectors.rule_based import RuleBasedDetector
 
 # Load data
-tenders = pd.read_csv('data/tenders_2023.csv', low_memory=False)
-buyers = pd.read_csv('data/buyers.csv')
-suppliers = pd.read_csv('data/suppliers.csv')
+tenders = load_tenders(years=[2023, 2024])
+buyers = load_buyers()
+
+# Run detection
+detector = RuleBasedDetector()
+results = detector.detect(tenders, buyers_df=buyers)
+
+# Get high-risk tenders
+high_risk = detector.get_high_risk()
 ```
 
-## Research Focus
+## Methods
 
-1. **Single-bidder analysis** - 91% of tenders have no competition
-2. **Price anomalies** - Unusual discounts/markups
-3. **Buyer-supplier networks** - Concentration and relationships
-4. **Temporal patterns** - War impact on procurement
+### Rule-Based Detection
+- 44 red flag rules across 6 categories
+- Risk scoring (critical/high/medium/low)
+- Based on ProZorro domain expertise
+
+### ML Methods (in progress)
+- Isolation Forest
+- Local Outlier Factor
+- Network Analysis
 
 ## Requirements
 
 ```bash
-pip install -r requirements.txt
+pip install pandas numpy scikit-learn matplotlib seaborn jupyter
 ```
 
-## Related
+## Author
 
-- [prozorro-parser](../prozorro-parser/) - Dataset parser and documentation
+Roman Kachmar - Master's Thesis, 2025
