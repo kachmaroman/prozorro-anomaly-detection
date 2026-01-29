@@ -187,9 +187,9 @@ RULE_DEFINITIONS: Dict[str, RuleConfig] = {
         name_ua="Низький win rate",
         category="price_quality",
         severity="medium",
-        description="Bidder has excessively low win rate",
+        description="Bidder has excessively low win rate (professional loser)",
         weight=1,
-        requires_aggregation=True
+        requires_bids=True
     ),
     "R027": RuleConfig(
         id="R027",
@@ -869,16 +869,29 @@ class RuleBasedDetector:
         # Flag if difference < 1% (suspiciously close)
         return ((merged["price_diff"].fillna(1) < 0.01) & (merged["price_diff"].fillna(1) >= 0)).astype(int)
 
-    def _check_low_win_rate(self, df: pd.DataFrame) -> pd.Series:
-        """R025: Bidder with excessively low win rate."""
-        # This needs bidder-level aggregation
-        if self._supplier_stats is None:
+    def _check_low_win_rate(self, df: pd.DataFrame, bids_df: pd.DataFrame = None) -> pd.Series:
+        """R025: Bidder with excessively low win rate (professional loser)."""
+        if bids_df is None:
             return pd.Series(0, index=df.index)
 
-        # Suppliers who participate a lot but rarely win
-        # Using supplier stats as proxy (they only have wins)
-        # Would need full bidder data for accurate calculation
-        return pd.Series(0, index=df.index)
+        # Calculate win rate per bidder
+        bidder_stats = bids_df.groupby("bidder_id").agg({
+            "is_winner": ["sum", "count"]
+        }).reset_index()
+        bidder_stats.columns = ["bidder_id", "wins", "total_bids"]
+        bidder_stats["win_rate"] = bidder_stats["wins"] / bidder_stats["total_bids"]
+
+        # Flag bidders with many bids but very low win rate (<5% with 10+ bids)
+        # These might be "professional losers" in bid rigging schemes
+        suspicious_bidders = bidder_stats[
+            (bidder_stats["total_bids"] >= 10) &
+            (bidder_stats["win_rate"] < 0.05)
+        ]["bidder_id"]
+
+        # Get tenders where these suspicious bidders participated
+        suspicious_tenders = bids_df[bids_df["bidder_id"].isin(suspicious_bidders)]["tender_id"].unique()
+
+        return df["tender_id"].isin(suspicious_tenders).astype(int)
 
     def _check_identical_bids(self, df: pd.DataFrame, bids_df: pd.DataFrame) -> pd.Series:
         """R028: Multiple bidders with identical bid amounts."""
@@ -908,16 +921,102 @@ class RuleBasedDetector:
         return ((merged["hours_spread"].fillna(999) < 1) & (merged["number_of_bids"] > 1)).astype(int)
 
     def _check_cobidding_same_winner(self, df: pd.DataFrame, bids_df: pd.DataFrame) -> pd.Series:
-        """R053: Co-bidding pairs always have same winner."""
-        # Complex rule - need to track bidder pairs across tenders
-        # Simplified implementation
-        return pd.Series(0, index=df.index)
+        """R053: Co-bidding pairs always have same winner (bid rigging indicator)."""
+        try:
+            # Find pairs of bidders who frequently bid together and one always wins
+            # Filter out rows with NA bidder_id
+            bids_clean = bids_df[bids_df["bidder_id"].notna()].copy()
+
+            # Get all bidder pairs per tender
+            tender_bidders = bids_clean.groupby("tender_id")["bidder_id"].apply(list).reset_index()
+            tender_winners = bids_clean[bids_clean["is_winner"] == 1].groupby("tender_id")["bidder_id"].first().reset_index()
+            tender_winners.columns = ["tender_id", "winner_id"]
+
+            tender_bidders = tender_bidders.merge(tender_winners, on="tender_id", how="left")
+
+            # Count co-bidding patterns (check if same winner when 2 bidders)
+            from collections import defaultdict
+            pair_wins = defaultdict(lambda: defaultdict(int))
+            pair_total = defaultdict(int)
+
+            for _, row in tender_bidders.iterrows():
+                bidders = row["bidder_id"]
+                winner = row["winner_id"]
+                # Skip if winner is NA/None or bidders list is wrong size
+                if isinstance(bidders, list) and len(bidders) == 2 and pd.notna(winner):
+                    # Filter out None values in bidders
+                    bidders = [b for b in bidders if pd.notna(b)]
+                    if len(bidders) == 2:
+                        pair = tuple(sorted(bidders))
+                        pair_total[pair] += 1
+                        pair_wins[pair][winner] += 1
+
+            # Find suspicious pairs: same winner > 80% of time, at least 5 co-bids
+            suspicious_pairs = set()
+            for pair, total in pair_total.items():
+                if total >= 5:
+                    max_wins = max(pair_wins[pair].values()) if pair_wins[pair] else 0
+                    if max_wins / total >= 0.8:
+                        suspicious_pairs.add(pair)
+
+            if not suspicious_pairs:
+                return pd.Series(0, index=df.index)
+
+            # Flag tenders with these suspicious pairs
+            def has_suspicious_pair(bidders):
+                if not isinstance(bidders, list) or len(bidders) != 2:
+                    return False
+                bidders = [b for b in bidders if pd.notna(b)]
+                if len(bidders) != 2:
+                    return False
+                pair = tuple(sorted(bidders))
+                return pair in suspicious_pairs
+
+            tender_bidders["is_suspicious"] = tender_bidders["bidder_id"].apply(has_suspicious_pair)
+            suspicious_tenders = tender_bidders[tender_bidders["is_suspicious"]]["tender_id"]
+
+            return df["tender_id"].isin(suspicious_tenders).astype(int)
+
+        except Exception as e:
+            # If anything fails, return zeros
+            return pd.Series(0, index=df.index)
 
     def _check_bid_rotation(self, df: pd.DataFrame) -> pd.Series:
-        """R057: Suppliers rotate winning in CPV category."""
-        # Check for rotation pattern in sequential wins
-        # Would need time-ordered analysis
-        return pd.Series(0, index=df.index)
+        """R057: Suppliers rotate winning in CPV category (cartel indicator)."""
+        # Detect if small group of suppliers take turns winning in a CPV
+
+        # Need datetime for ordering
+        df_copy = df.copy()
+        if not pd.api.types.is_datetime64_any_dtype(df_copy["published_date"]):
+            df_copy["published_date"] = pd.to_datetime(df_copy["published_date"], errors="coerce")
+
+        suspicious_tenders = set()
+
+        # Analyze each CPV category
+        for cpv in df_copy["main_cpv_2_digit"].dropna().unique():
+            cpv_df = df_copy[df_copy["main_cpv_2_digit"] == cpv].sort_values("published_date")
+
+            if len(cpv_df) < 10:
+                continue
+
+            # Get sequence of winners
+            winners = cpv_df["supplier_id"].dropna().tolist()
+            if len(winners) < 10:
+                continue
+
+            # Check for rotation pattern: small group alternating wins
+            unique_winners = set(winners[:20])  # Look at first 20 wins
+            if len(unique_winners) <= 3 and len(unique_winners) >= 2:
+                # Very few winners - check if they alternate
+                # Count transitions between different winners
+                transitions = sum(1 for i in range(len(winners)-1) if winners[i] != winners[i+1])
+                transition_rate = transitions / (len(winners) - 1)
+
+                # High transition rate with few winners = rotation
+                if transition_rate > 0.6:
+                    suspicious_tenders.update(cpv_df["tender_id"].tolist())
+
+        return df["tender_id"].isin(suspicious_tenders).astype(int)
 
     def _check_extreme_discount(self, df: pd.DataFrame) -> pd.Series:
         """R058: Extreme discount (>50%)."""
@@ -1073,10 +1172,35 @@ class RuleBasedDetector:
         ).astype(int)
 
     def _check_small_then_large(self, df: pd.DataFrame) -> pd.Series:
-        """R052: Small initial purchase followed by large purchases."""
-        # Need time-ordered analysis per buyer-supplier pair
-        # Simplified: flag if supplier's first contract was small but total is large
-        return pd.Series(0, index=df.index)
+        """R052: Small initial purchase followed by much larger purchases."""
+        # Pattern: buyer starts with small contract to supplier, then gives large ones
+        # This can be used to establish "relationship" before big awards
+
+        df_copy = df.copy()
+        if not pd.api.types.is_datetime64_any_dtype(df_copy["published_date"]):
+            df_copy["published_date"] = pd.to_datetime(df_copy["published_date"], errors="coerce")
+
+        suspicious_tenders = set()
+
+        # Analyze each buyer-supplier pair
+        for (buyer_id, supplier_id), group in df_copy.groupby(["buyer_id", "supplier_id"]):
+            if len(group) < 3:
+                continue
+
+            group = group.sort_values("published_date")
+            values = group["tender_value"].tolist()
+
+            # Check if first contract was small and later ones much larger
+            first_value = values[0]
+            max_later = max(values[1:]) if len(values) > 1 else 0
+            avg_later = sum(values[1:]) / len(values[1:]) if len(values) > 1 else 0
+
+            # Flag if first was <20% of average later and later contracts are 5x larger
+            if first_value > 0 and avg_later > 0:
+                if first_value < avg_later * 0.2 and max_later > first_value * 5:
+                    suspicious_tenders.update(group["tender_id"].tolist())
+
+        return df["tender_id"].isin(suspicious_tenders).astype(int)
 
     def _check_multiple_near_threshold(self, df: pd.DataFrame) -> pd.Series:
         """R055: Multiple direct awards near threshold to same supplier."""
