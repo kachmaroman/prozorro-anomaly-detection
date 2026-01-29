@@ -1135,9 +1135,17 @@ class RuleBasedDetector:
 
     def _check_lowest_bid_disqualified(self, df: pd.DataFrame, bids_df: pd.DataFrame) -> pd.Series:
         """R036: Lowest bid was disqualified."""
-        # Find lowest bid per tender and check if disqualified
-        idx_min = bids_df.groupby("tender_id")["bid_amount"].idxmin()
-        lowest_bids = bids_df.loc[idx_min, ["tender_id", "bid_status"]]
+        # Filter out NaN bid_amounts first
+        valid_bids = bids_df[bids_df["bid_amount"].notna()].copy()
+        if len(valid_bids) == 0:
+            return pd.Series(0, index=df.index)
+
+        # Find lowest bid per tender
+        idx_min = valid_bids.groupby("tender_id")["bid_amount"].idxmin().dropna()
+        if len(idx_min) == 0:
+            return pd.Series(0, index=df.index)
+
+        lowest_bids = valid_bids.loc[idx_min, ["tender_id", "bid_status"]]
         lowest_bids["lowest_disqualified"] = (lowest_bids["bid_status"] == "disqualified")
 
         merged = df.merge(lowest_bids[["tender_id", "lowest_disqualified"]], on="tender_id", how="left")
