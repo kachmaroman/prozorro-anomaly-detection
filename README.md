@@ -64,4 +64,4 @@ pip install pandas numpy scikit-learn matplotlib seaborn jupyter
 
 ## Author
 
-Roman Kachmar - Master's Thesis, 2025
+Roman Kachmar - Master's Thesis, 2026
