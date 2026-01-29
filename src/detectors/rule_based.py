@@ -819,7 +819,7 @@ class RuleBasedDetector:
 
         # Z-score
         zscore = (merged["tender_value"] - merged["cpv_value_mean"]) / merged["cpv_value_std"].replace(0, np.nan)
-        return (zscore.abs() > 3).fillna(False).astype(int)
+        return (zscore.abs() > 3).fillna(0).astype(int)
 
     def _check_wide_bid_disparity(self, df: pd.DataFrame, bids_df: pd.DataFrame) -> pd.Series:
         """R022: Wide disparity in bid prices."""
@@ -862,7 +862,7 @@ class RuleBasedDetector:
                 return np.nan
             return (second - first) / first
 
-        price_diffs = bids_df.groupby("tender_id").apply(get_price_diff).reset_index()
+        price_diffs = bids_df.groupby("tender_id").apply(get_price_diff, include_groups=False).reset_index()
         price_diffs.columns = ["tender_id", "price_diff"]
 
         merged = df.merge(price_diffs, on="tender_id", how="left")
@@ -1097,12 +1097,12 @@ class RuleBasedDetector:
             observed = group["first_digit"].value_counts(normalize=True)
             chi_sq = 0
             for digit in range(1, 10):
-                obs = observed.get(digit, 0)
+                obs = observed.loc[digit] if digit in observed.index else 0
                 exp = benford[digit]
                 chi_sq += ((obs - exp) ** 2) / exp
             return 1 if chi_sq > 15.51 else 0  # Chi-sq critical value for df=8, alpha=0.05
 
-        benford_flags = bids_df.groupby("tender_id").apply(check_benford).reset_index()
+        benford_flags = bids_df.groupby("tender_id").apply(check_benford, include_groups=False).reset_index()
         benford_flags.columns = ["tender_id", "benford_flag"]
 
         merged = df.merge(benford_flags, on="tender_id", how="left")
@@ -1115,7 +1115,7 @@ class RuleBasedDetector:
         # Flag only for Open/Selective where we expect discount from competition
         # ratio >= 0.995 means less than 0.5% discount (suspicious for competitive)
         is_competitive = df["procurement_method"].isin([ProcurementMethod.OPEN, ProcurementMethod.SELECTIVE])
-        return (is_competitive & ((ratio >= 0.995) | (ratio > 1))).fillna(False).astype(int)
+        return (is_competitive & ((ratio >= 0.995) | (ratio > 1))).fillna(0).astype(int)
 
     def _check_all_except_winner_disqualified(self, df: pd.DataFrame, bids_df: pd.DataFrame) -> pd.Series:
         """R035: All bids except winner disqualified."""
@@ -1131,7 +1131,7 @@ class RuleBasedDetector:
         )
 
         merged = df.merge(disq_counts[["tender_id", "all_but_one_disq"]], on="tender_id", how="left")
-        return merged["all_but_one_disq"].fillna(False).astype(int)
+        return merged["all_but_one_disq"].fillna(0).astype(int)
 
     def _check_lowest_bid_disqualified(self, df: pd.DataFrame, bids_df: pd.DataFrame) -> pd.Series:
         """R036: Lowest bid was disqualified."""
@@ -1141,7 +1141,7 @@ class RuleBasedDetector:
         lowest_bids["lowest_disqualified"] = (lowest_bids["bid_status"] == "disqualified")
 
         merged = df.merge(lowest_bids[["tender_id", "lowest_disqualified"]], on="tender_id", how="left")
-        return merged["lowest_disqualified"].fillna(False).astype(int)
+        return merged["lowest_disqualified"].fillna(0).astype(int)
 
     def _check_excessive_disqualifications(self, df: pd.DataFrame, bids_df: pd.DataFrame) -> pd.Series:
         """R038: High disqualification rate."""
