@@ -16,13 +16,15 @@ master-thesis/
 ├── data/                # Dataset (from prozorro-parser)
 ├── notebooks/           # Jupyter notebooks for analysis
 │   ├── 01_eda.ipynb
-│   └── 02_rule_based.ipynb
+│   ├── 02_rule_based.ipynb
+│   └── 03_statistical_screens.ipynb
 ├── src/                 # Source code for models
 │   ├── config.py        # Thresholds, paths, constants
 │   ├── data_loader.py   # Optimized data loading (13M+ records)
 │   ├── features/        # Feature engineering (TODO)
 │   ├── detectors/
-│   │   └── rule_based.py  # 44 red flag rules (DONE)
+│   │   ├── rule_based.py   # 44 red flag rules (DONE)
+│   │   └── statistical.py  # Statistical screens (DONE)
 │   └── evaluation/      # Cross-method validation (TODO)
 ├── results/             # Experiment results and figures
 └── references/          # Research papers
@@ -94,6 +96,30 @@ results = detector.detect(tenders, bids_df=bids)
 print(detector.summary())
 ```
 
+### Statistical Screens (DONE - `src/detectors/statistical.py`)
+
+**Статистичні тести** для конкурентних закупівель (Open/Selective з 3+ учасниками):
+
+| Метод | Опис | Застосування |
+|-------|------|--------------|
+| Z-score | Виявляє викиди за стандартним відхиленням | Per-tender (ціни) |
+| IQR | Interquartile range outliers | Per-tender |
+| Benford's Law | Перевірка розподілу перших цифр | **Per-buyer, Per-supplier** (потребує 30+ зразків) |
+| Bid Spread | CV, Min-Max різниця цін | Лише competitive (3+ bidders) |
+| HHI | Herfindahl-Hirschman Index | Концентрація ринку |
+
+**Важливо:** Статистичні тести (bid spread, award ratio) застосовуються ЛИШЕ до:
+- Процедур Open або Selective
+- Тендерів з 3+ учасниками
+
+**Використання:**
+```python
+from src.detectors.statistical import StatisticalDetector
+detector = StatisticalDetector()
+results = detector.detect(tenders, bids_df=bids)
+print(detector.summary())
+```
+
 ### Machine Learning (unsupervised)
 | Метод | Опис | Коли використовувати |
 |-------|------|---------------------|
@@ -112,7 +138,7 @@ print(detector.summary())
 
 ### Рекомендований pipeline
 ```
-1. Baseline (Red Flags) → 2. Isolation Forest → 3. LOF/DBSCAN → 4. Ensemble
+1. Rule-based (Red Flags) ✓ → 2. Statistical Screens ✓ → 3. Isolation Forest → 4. LOF/DBSCAN → 5. Ensemble
 ```
 
 ## Key Features for Models
@@ -148,7 +174,7 @@ print(detector.summary())
 - [x] Project structure (`src/`)
 - [x] Data loader with memory optimization
 - [x] **Rule-based detector (44 rules, 37 active)**
-- [ ] Statistical screens (CV, RDNOR for Open tenders)
+- [x] **Statistical screens (Benford, Z-score, HHI, Bid Spread)**
 - [ ] Isolation Forest
 - [ ] LOF / DBSCAN
 - [ ] Ensemble (cross-method agreement)
