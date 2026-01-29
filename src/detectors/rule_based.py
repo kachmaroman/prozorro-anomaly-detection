@@ -572,13 +572,16 @@ class RuleBasedDetector:
         Returns:
             DataFrame with added flag columns and risk scores
         """
+        print(f"Processing {len(df):,} tenders...")
         result = df.copy()
 
         # Compute aggregations if needed
         if compute_aggregations:
+            print("Step 1/4: Computing aggregations...")
             self._compute_aggregations(result)
 
         # Merge reference data if provided
+        print("Step 2/4: Merging reference data...")
         if buyers_df is not None:
             result = self._merge_buyers(result, buyers_df)
         if suppliers_df is not None:
@@ -589,6 +592,8 @@ class RuleBasedDetector:
         result["rule_flags_count"] = 0
 
         # Apply all rules
+        print(f"Step 3/4: Applying {len(self.rule_configs)} rules...")
+        rules_applied = 0
         for rule_id, config in self.rule_configs.items():
             # Skip rules that need bids if not provided
             if config.requires_bids and bids_df is None:
@@ -607,17 +612,22 @@ class RuleBasedDetector:
                     mask = result[flag_col] == 1
                     result.loc[mask, "rule_risk_score"] += config.weight
                     result.loc[mask, "rule_flags_count"] += 1
+                    rules_applied += 1
                 except Exception as e:
                     print(f"Warning: Rule {rule_id} failed: {e}")
                     result[f"flag_{config.name}"] = 0
 
+        print(f"  Applied {rules_applied} rules successfully.")
+
         # Calculate risk levels
+        print("Step 4/4: Computing risk levels and summary...")
         result["rule_risk_level"] = self._calculate_risk_level(result["rule_risk_score"])
 
         # Compute summary
         self._compute_flags_summary(result)
         self.results = result
 
+        print("Detection complete!")
         return result
 
     # =========================================================================
@@ -626,6 +636,7 @@ class RuleBasedDetector:
 
     def _compute_aggregations(self, df: pd.DataFrame):
         """Compute aggregated statistics for context-aware rules."""
+        print("  Computing CPV stats...")
         # CPV statistics
         self._cpv_stats = df.groupby("main_cpv_2_digit").agg({
             "tender_value": ["mean", "median", "std", "count"],
@@ -638,11 +649,15 @@ class RuleBasedDetector:
             "cpv_discount_mean", "cpv_discount_median"
         ]
 
-        # Buyer statistics
-        self._buyer_stats = df.groupby("buyer_id").agg({
+        print("  Computing buyer stats...")
+        # Pre-compute is_limited column to avoid lambda in groupby
+        df_temp = df.assign(_is_limited=(df["procurement_method"] == "limited").astype(int))
+
+        # Buyer statistics - native agg, no lambda
+        self._buyer_stats = df_temp.groupby("buyer_id").agg({
             "tender_id": "count",
             "is_single_bidder": "mean",
-            "procurement_method": lambda x: (x == "limited").mean(),
+            "_is_limited": "mean",
             "tender_value": "sum",
         }).reset_index()
         self._buyer_stats.columns = [
@@ -650,6 +665,7 @@ class RuleBasedDetector:
             "buyer_limited_rate", "buyer_total_value"
         ]
 
+        print("  Computing supplier stats...")
         # Supplier statistics
         self._supplier_stats = df.groupby("supplier_id").agg({
             "tender_id": "count",
@@ -662,12 +678,14 @@ class RuleBasedDetector:
             "supplier_cpv_count", "supplier_buyer_count"
         ]
 
+        print("  Computing pair stats...")
         # Buyer-Supplier pair statistics
         self._pair_stats = df.groupby(["buyer_id", "supplier_id"]).agg({
             "tender_id": "count",
             "tender_value": "sum",
         }).reset_index()
         self._pair_stats.columns = ["buyer_id", "supplier_id", "pair_count", "pair_value"]
+        print("  Aggregations complete.")
 
     def _merge_buyers(self, df: pd.DataFrame, buyers_df: pd.DataFrame) -> pd.DataFrame:
         """Merge buyer reference data."""
@@ -1363,25 +1381,29 @@ class RuleBasedDetector:
         )
 
     def _compute_flags_summary(self, df: pd.DataFrame):
-        """Compute summary of detected flags."""
+        """Compute summary of detected flags (optimized with numpy)."""
         flag_cols = [col for col in df.columns if col.startswith("flag_")]
+        if not flag_cols:
+            self.flags_detected = []
+            return
+
         total = len(df)
 
-        self.flags_detected = []
-        for col in flag_cols:
-            rule_name = col.replace("flag_", "")
+        # Pre-build name->config mapping for O(1) lookup
+        name_to_config = {rc.name: rc for rc in self.rule_configs.values()}
 
-            # Find matching rule config
-            config = None
-            for rule_id, rc in self.rule_configs.items():
-                if rc.name == rule_name:
-                    config = rc
-                    break
+        # Vectorized sum of all flag columns at once (much faster than iterating)
+        flag_counts = df[flag_cols].values.sum(axis=0)
+
+        self.flags_detected = []
+        for col, count in zip(flag_cols, flag_counts):
+            rule_name = col.replace("flag_", "")
+            config = name_to_config.get(rule_name)
 
             if config is None:
                 continue
 
-            count = int(df[col].sum())
+            count = int(count)
             pct = round(count / total * 100, 2)
 
             flag = RedFlag(
