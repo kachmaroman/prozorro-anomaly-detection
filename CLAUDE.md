@@ -15,7 +15,15 @@ master-thesis/
 ├── thesis/              # Academic documents (PDF, references)
 ├── data/                # Dataset (from prozorro-parser)
 ├── notebooks/           # Jupyter notebooks for analysis
+│   ├── 01_eda.ipynb
+│   └── 02_rule_based.ipynb
 ├── src/                 # Source code for models
+│   ├── config.py        # Thresholds, paths, constants
+│   ├── data_loader.py   # Optimized data loading (13M+ records)
+│   ├── features/        # Feature engineering (TODO)
+│   ├── detectors/
+│   │   └── rule_based.py  # 44 red flag rules (DONE)
+│   └── evaluation/      # Cross-method validation (TODO)
 ├── results/             # Experiment results and figures
 └── references/          # Research papers
 ```
@@ -61,11 +69,30 @@ Dataset is in `data/` folder (~5.3 GB):
 
 ## Anomaly Detection Methods
 
-### Rule-based (традиційні)
-| Метод | Опис |
-|-------|------|
-| Red Flags | Фіксовані правила (single bidder, ціна > поріг) |
-| Statistical thresholds | Z-score, IQR для виявлення outliers |
+### Rule-based (DONE - `src/detectors/rule_based.py`)
+
+**44 правила** в 6 категоріях (37 активних):
+
+| Категорія | Правил | Приклади |
+|-----------|--------|----------|
+| Process Quality | 3 | R005 missing docs, R013 high limited usage |
+| Competition Quality | 5 | R018 single bidder, R040 buyer-supplier dominance |
+| Price Quality | 11 | R028 identical bids, R053 co-bidding same winner |
+| Procedure Manipulation | 13 | R011 contract splitting, R002 threshold manipulation |
+| Reputation | 2 | R048 heterogeneous supplier, R069 price increase |
+| Additional | 10 | X009 single bidder low discount, X010 same day awards |
+
+**Результати (2023, 10% sample):**
+- Critical: ~2,100 (0.6%)
+- High Risk: ~12,400 (3.5%)
+
+**Використання:**
+```python
+from src.detectors.rule_based import RuleBasedDetector
+detector = RuleBasedDetector()
+results = detector.detect(tenders, bids_df=bids)
+print(detector.summary())
+```
 
 ### Machine Learning (unsupervised)
 | Метод | Опис | Коли використовувати |
@@ -115,13 +142,16 @@ Dataset is in `data/` folder (~5.3 GB):
 ## Current Status
 
 - [x] Dataset parsed (13.1M tenders)
-- [x] Basic EDA completed
+- [x] Basic EDA completed (`notebooks/01_eda.ipynb`)
 - [x] Kaggle dataset uploaded
 - [x] Buyers "portrait" features (16 columns)
-- [ ] Expand information portraits
-- [ ] Literature review (methods)
-- [ ] Baseline models
-- [ ] Anomaly detection models
+- [x] Project structure (`src/`)
+- [x] Data loader with memory optimization
+- [x] **Rule-based detector (44 rules, 37 active)**
+- [ ] Statistical screens (CV, RDNOR for Open tenders)
+- [ ] Isolation Forest
+- [ ] LOF / DBSCAN
+- [ ] Ensemble (cross-method agreement)
 - [ ] Thesis writing
 
 ## Related Projects
@@ -139,4 +169,4 @@ Dataset is in `data/` folder (~5.3 GB):
 - jupyter - notebooks
 
 ---
-Last updated: 2026-01-18
+Last updated: 2026-01-29
