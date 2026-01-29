@@ -10,6 +10,7 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+src/.venv/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -27,4 +28,5 @@ results/metrics/
 Thumbs.db
 
 /methodology_plan.pdf
+/Red_Flags_Prozorro.xlsx
 /prompts.md
