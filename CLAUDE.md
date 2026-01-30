@@ -242,7 +242,8 @@ Dataset in `data/` folder (~5.3 GB):
 - **scikit-learn** - Preprocessing, metrics
 - **PyOD** - Anomaly detection algorithms
 - **HDBSCAN** - Clustering
-- **NetworkX** - Graph analysis
+- **igraph** - Fast graph analysis (community detection, centrality)
+- **NetworkX** - Graph utilities and visualization
 - **Matplotlib/Seaborn** - Visualization
 
 ## Related Projects

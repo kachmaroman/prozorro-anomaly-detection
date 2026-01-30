@@ -23,6 +23,12 @@ except ImportError:
     NETWORKX_AVAILABLE = False
 
 try:
+    import igraph as ig
+    IGRAPH_AVAILABLE = True
+except ImportError:
+    IGRAPH_AVAILABLE = False
+
+try:
     from community import community_louvain
     LOUVAIN_AVAILABLE = True
 except ImportError:
@@ -195,11 +201,72 @@ class NetworkAnalysisDetector:
             self.cobid_metrics = pd.DataFrame()
             return
 
+        # Use igraph for faster computation if available
+        if IGRAPH_AVAILABLE:
+            self._analyze_with_igraph()
+        else:
+            self._analyze_with_networkx()
+
+    def _analyze_with_igraph(self) -> None:
+        """Fast community detection and metrics using igraph."""
+        print("    Using igraph (fast)...")
+
+        # Convert NetworkX to igraph
+        # Get edges with weights
+        edges = list(self.G_cobid.edges(data=True))
+        nodes = list(self.G_cobid.nodes())
+        node_to_idx = {node: i for i, node in enumerate(nodes)}
+
+        g_ig = ig.Graph()
+        g_ig.add_vertices(len(nodes))
+        g_ig.vs["name"] = nodes
+
+        edge_list = [(node_to_idx[e[0]], node_to_idx[e[1]]) for e in edges]
+        weights = [e[2].get("weight", 1) for e in edges]
+        g_ig.add_edges(edge_list)
+        g_ig.es["weight"] = weights
+
+        # Community detection (Louvain/Multilevel - very fast)
+        communities = g_ig.community_multilevel(weights="weight")
+        partition = {nodes[i]: communities.membership[i] for i in range(len(nodes))}
+        self.cobid_communities = partition
+
+        # Compute metrics (all fast in igraph)
+        degrees = g_ig.degree()
+        clustering = g_ig.transitivity_local_undirected(mode="zero")
+
+        # Betweenness - igraph is much faster
+        if len(nodes) > 10000:
+            # Sample for very large graphs
+            betweenness = g_ig.betweenness(weights="weight", cutoff=3)
+        else:
+            betweenness = g_ig.betweenness(weights="weight")
+
+        # Normalize betweenness
+        n = len(nodes)
+        if n > 2:
+            max_betweenness = (n - 1) * (n - 2) / 2
+            betweenness = [b / max_betweenness if max_betweenness > 0 else 0 for b in betweenness]
+
+        self.cobid_metrics = pd.DataFrame({
+            "bidder_id": nodes,
+            "community": [partition[n] for n in nodes],
+            "degree": degrees,
+            "clustering": clustering,
+            "betweenness": betweenness,
+        })
+
+        n_communities = len(set(partition.values()))
+        print(f"    Communities: {n_communities}")
+
+    def _analyze_with_networkx(self) -> None:
+        """Fallback community detection using NetworkX."""
+        print("    Using NetworkX (slower)...")
+
         # Community detection
         if LOUVAIN_AVAILABLE:
             partition = community_louvain.best_partition(self.G_cobid, weight="weight")
         else:
-            # Fallback to greedy modularity
             from networkx.algorithms.community import greedy_modularity_communities
             communities = list(greedy_modularity_communities(self.G_cobid, weight="weight"))
             partition = {}
@@ -232,7 +299,6 @@ class NetworkAnalysisDetector:
             for node in self.G_cobid.nodes()
         ])
 
-        # Count communities
         n_communities = len(set(partition.values()))
         print(f"    Communities: {n_communities}")
 
