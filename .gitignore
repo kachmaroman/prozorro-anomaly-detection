@@ -28,6 +28,8 @@ results/anomalies/
 .DS_Store
 Thumbs.db
 
+/results
+
 /methodology_plan.pdf
 /Red_Flags_Prozorro.xlsx
 /prompts.md

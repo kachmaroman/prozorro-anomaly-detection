@@ -16,8 +16,12 @@ master-thesis/
 ├── data/                # Dataset (from prozorro-parser)
 ├── notebooks/           # Jupyter notebooks for analysis
 │   ├── 01_eda.ipynb
-│   ├── 02_rule_based.ipynb
-│   └── 03_statistical_screens.ipynb
+│   ├── 02_rule_based.ipynb         # Level 1: Rule-based
+│   ├── 03_statistical_screens.ipynb # Level 2: Statistical
+│   ├── 04_isolation_forest.ipynb   # Level 3: ML (IF)
+│   ├── 05_hdbscan.ipynb            # Level 3: ML (HDBSCAN + Cartel clusters)
+│   ├── 06_ensemble.ipynb           # Cross-method validation
+│   └── 07_network_analysis.ipynb   # Level 4: Network Analysis
 ├── src/                 # Source code for models
 │   ├── config.py        # Thresholds, paths, constants
 │   ├── data_loader.py   # Optimized data loading (13M+ records)
@@ -129,16 +133,24 @@ print(detector.summary())
 | **DBSCAN** | Кластеризація, аномалії = шум | Пошук груп (картелі) |
 | **Autoencoder** | Нейронка, аномалії = великий reconstruction error | Складні залежності |
 
-### Специфічні для procurement
-| Метод | Застосування |
-|-------|--------------|
-| Network Analysis | Виявлення картелів, змов |
-| Sequential Pattern Mining | Bid rotation схеми |
-| Benford's Law | Маніпуляції з цінами |
+### Network Analysis (DONE - `notebooks/07_network_analysis.ipynb`)
 
-### Рекомендований pipeline
+**Типи графів:**
+| Граф | Вузли | Ребра | Що виявляє |
+|------|-------|-------|------------|
+| Bidder Co-participation | bidder_id | Спільна участь | Картелі |
+| Winner-Loser | bidder_id | Переможець → Програвший | Bid-rigging rings |
+| Buyer-Supplier | buyer + supplier | Контракт | Монопольні відносини |
+
+**Метрики:**
+- Community detection (Louvain) - групи тісно пов'язаних учасників
+- Betweenness centrality - координатори змов
+- Clustering coefficient - замкнуті групи
+- Degree distribution - аномально активні учасники
+
+### Рекомендований pipeline (з methodology_plan.pdf)
 ```
-1. Rule-based (Red Flags) ✓ → 2. Statistical Screens ✓ → 3. Isolation Forest → 4. LOF/DBSCAN → 5. Ensemble
+Level 1: Rule-based ✓ → Level 2: Statistical ✓ → Level 3: ML (IF, HDBSCAN) ✓ → Level 4: Network Analysis ✓ → Ensemble
 ```
 
 ## Key Features for Models
@@ -173,11 +185,12 @@ print(detector.summary())
 - [x] Buyers "portrait" features (16 columns)
 - [x] Project structure (`src/`)
 - [x] Data loader with memory optimization
-- [x] **Rule-based detector (44 rules, 37 active)**
-- [x] **Statistical screens (Benford, Z-score, HHI, Bid Spread)**
-- [ ] Isolation Forest
-- [ ] LOF / DBSCAN
-- [ ] Ensemble (cross-method agreement)
+- [x] **Level 1: Rule-based detector (44 rules, 37 active)**
+- [x] **Level 2: Statistical screens (Benford, Z-score, HHI, Bid Spread)**
+- [x] **Level 3: Isolation Forest (19 features, 5% contamination)**
+- [x] **Level 3: HDBSCAN (clustering + outlier detection)**
+- [x] **Level 4: Network Analysis (co-bidding, winner-loser, buyer-supplier graphs)**
+- [x] **Ensemble notebook (cross-method validation)**
 - [ ] Thesis writing
 
 ## Related Projects
@@ -195,4 +208,4 @@ print(detector.summary())
 - jupyter - notebooks
 
 ---
-Last updated: 2026-01-29
+Last updated: 2026-01-30
