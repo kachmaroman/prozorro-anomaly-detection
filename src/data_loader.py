@@ -163,11 +163,11 @@ def load_tenders(
         combined = combined.collect()
         print(f"Loaded {len(combined):,} records")
 
-    # Parse date columns
+    # Parse date columns (handle timezone in data)
     for col in DATE_COLUMNS:
         if col in combined.columns:
             combined = combined.with_columns(
-                pl.col(col).str.to_datetime(strict=False).alias(col)
+                pl.col(col).str.to_datetime(time_zone="UTC", strict=False).alias(col)
             )
 
     if return_polars:
@@ -232,10 +232,10 @@ def load_bids(
 
     print(f"Loaded {len(combined):,} bids")
 
-    # Parse bid_date
+    # Parse bid_date (handle timezone in data)
     if "bid_date" in combined.columns:
         combined = combined.with_columns(
-            pl.col("bid_date").str.to_datetime(strict=False).alias("bid_date")
+            pl.col("bid_date").str.to_datetime(time_zone="UTC", strict=False).alias("bid_date")
         )
 
     if return_polars:
@@ -245,7 +245,11 @@ def load_bids(
 
 def load_buyers(return_polars: bool = False) -> Union[pl.DataFrame, pd.DataFrame]:
     """Load buyers reference table."""
-    df = pl.read_csv(BUYERS_FILE)
+    df = pl.read_csv(
+        BUYERS_FILE,
+        schema_overrides={"buyer_id": pl.Utf8},
+        infer_schema_length=10000,
+    )
     print(f"Loaded buyers: {len(df):,}")
 
     if return_polars:
@@ -255,7 +259,11 @@ def load_buyers(return_polars: bool = False) -> Union[pl.DataFrame, pd.DataFrame
 
 def load_suppliers(return_polars: bool = False) -> Union[pl.DataFrame, pd.DataFrame]:
     """Load suppliers reference table."""
-    df = pl.read_csv(SUPPLIERS_FILE)
+    df = pl.read_csv(
+        SUPPLIERS_FILE,
+        schema_overrides={"supplier_id": pl.Utf8},
+        infer_schema_length=10000,
+    )
     print(f"Loaded suppliers: {len(df):,}")
 
     if return_polars:
@@ -265,7 +273,11 @@ def load_suppliers(return_polars: bool = False) -> Union[pl.DataFrame, pd.DataFr
 
 def load_bidders(return_polars: bool = False) -> Union[pl.DataFrame, pd.DataFrame]:
     """Load bidders reference table."""
-    df = pl.read_csv(BIDDERS_FILE)
+    df = pl.read_csv(
+        BIDDERS_FILE,
+        schema_overrides={"bidder_id": pl.Utf8},
+        infer_schema_length=10000,
+    )
     print(f"Loaded bidders: {len(df):,}")
 
     if return_polars:
