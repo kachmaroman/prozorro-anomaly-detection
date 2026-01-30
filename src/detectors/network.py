@@ -57,6 +57,13 @@ class NetworkAnalysisDetector:
         min_co_bids: int = 3,
         min_contracts: int = 3,
         min_community_size: int = 3,
+        # Anomaly thresholds
+        suspicious_min_degree: int = 10,
+        suspicious_min_clustering: float = 0.7,
+        rotation_min_ratio: float = 0.7,
+        rotation_min_interactions: int = 5,
+        monopoly_min_ratio: float = 0.9,
+        monopoly_min_contracts: int = 20,
     ):
         """
         Initialize Network Analysis detector.
@@ -65,6 +72,12 @@ class NetworkAnalysisDetector:
             min_co_bids: Minimum co-bids for co-bidding edge
             min_contracts: Minimum contracts for buyer-supplier edge
             min_community_size: Minimum community size to consider
+            suspicious_min_degree: Min degree for suspicious supplier
+            suspicious_min_clustering: Min clustering for suspicious supplier
+            rotation_min_ratio: Min rotation ratio for bid rotation flag
+            rotation_min_interactions: Min total interactions for rotation
+            monopoly_min_ratio: Min dominance ratio for monopoly flag
+            monopoly_min_contracts: Min total contracts for monopoly flag
         """
         if not NETWORKX_AVAILABLE:
             raise ImportError("networkx package not installed. Run: pip install networkx")
@@ -72,6 +85,14 @@ class NetworkAnalysisDetector:
         self.min_co_bids = min_co_bids
         self.min_contracts = min_contracts
         self.min_community_size = min_community_size
+
+        # Anomaly thresholds
+        self.suspicious_min_degree = suspicious_min_degree
+        self.suspicious_min_clustering = suspicious_min_clustering
+        self.rotation_min_ratio = rotation_min_ratio
+        self.rotation_min_interactions = rotation_min_interactions
+        self.monopoly_min_ratio = monopoly_min_ratio
+        self.monopoly_min_contracts = monopoly_min_contracts
 
         # Graphs
         self.G_cobid = None  # Co-bidding graph
@@ -255,6 +276,7 @@ class NetworkAnalysisDetector:
                         "bidder_2": v,
                         "wins_1_over_2": data["weight"],
                         "wins_2_over_1": reverse_weight,
+                        "total_interactions": data["weight"] + reverse_weight,
                         "rotation_ratio": rotation_ratio,
                     })
 
@@ -299,12 +321,17 @@ class NetworkAnalysisDetector:
         dominant = dominant.merge(buyer_totals, on="buyer_id")
         dominant["dominance_ratio"] = dominant["contract_count"] / dominant["total_contracts"]
 
+        # Store all dominant pairs (filter later with configurable thresholds)
         self.monopolistic_pairs = dominant[
-            (dominant["dominance_ratio"] >= 0.8) &
-            (dominant["total_contracts"] >= 10)
+            dominant["dominance_ratio"] >= 0.5  # Store more, filter later
         ].sort_values("total_value", ascending=False)
 
-        print(f"    Monopolistic pairs: {len(self.monopolistic_pairs)}")
+        # Report with default loose threshold for info
+        n_monopolistic = len(dominant[
+            (dominant["dominance_ratio"] >= 0.8) &
+            (dominant["total_contracts"] >= 10)
+        ])
+        print(f"    Monopolistic pairs (>=80%, >=10 contracts): {n_monopolistic}")
 
     def _compute_tender_results(
         self,
@@ -317,34 +344,45 @@ class NetworkAnalysisDetector:
         # Flag 1: Supplier in suspicious community (high clustering + degree)
         if self.cobid_metrics is not None and len(self.cobid_metrics) > 0:
             suspicious_bidders = self.cobid_metrics[
-                (self.cobid_metrics["degree"] >= 5) &
-                (self.cobid_metrics["clustering"] >= 0.5)
+                (self.cobid_metrics["degree"] >= self.suspicious_min_degree) &
+                (self.cobid_metrics["clustering"] >= self.suspicious_min_clustering)
             ]["bidder_id"].tolist()
 
             result["network_suspicious_supplier"] = result["supplier_id"].isin(suspicious_bidders).astype(int)
+            print(f"    Suspicious suppliers: {len(suspicious_bidders)}")
         else:
             result["network_suspicious_supplier"] = 0
 
-        # Flag 2: Buyer-supplier monopolistic relationship
+        # Flag 2: Buyer-supplier monopolistic relationship (use stricter thresholds)
         if self.monopolistic_pairs is not None and len(self.monopolistic_pairs) > 0:
+            strict_monopolistic = self.monopolistic_pairs[
+                (self.monopolistic_pairs["dominance_ratio"] >= self.monopoly_min_ratio) &
+                (self.monopolistic_pairs["total_contracts"] >= self.monopoly_min_contracts)
+            ]
             monopolistic_set = set(zip(
-                self.monopolistic_pairs["buyer_id"],
-                self.monopolistic_pairs["supplier_id"]
+                strict_monopolistic["buyer_id"],
+                strict_monopolistic["supplier_id"]
             ))
             result["network_monopolistic"] = result.apply(
                 lambda x: 1 if (x["buyer_id"], x["supplier_id"]) in monopolistic_set else 0,
                 axis=1
             )
+            print(f"    Strict monopolistic pairs: {len(strict_monopolistic)}")
         else:
             result["network_monopolistic"] = 0
 
-        # Flag 3: Supplier in bid rotation pair
+        # Flag 3: Supplier in bid rotation pair (stricter criteria)
         if self.rotation_pairs is not None and len(self.rotation_pairs) > 0:
+            strict_rotation = self.rotation_pairs[
+                (self.rotation_pairs["rotation_ratio"] >= self.rotation_min_ratio) &
+                (self.rotation_pairs["total_interactions"] >= self.rotation_min_interactions)
+            ]
             rotation_bidders = set(
-                self.rotation_pairs[self.rotation_pairs["rotation_ratio"] >= 0.5]["bidder_1"].tolist() +
-                self.rotation_pairs[self.rotation_pairs["rotation_ratio"] >= 0.5]["bidder_2"].tolist()
+                strict_rotation["bidder_1"].tolist() +
+                strict_rotation["bidder_2"].tolist()
             )
             result["network_rotation"] = result["supplier_id"].isin(rotation_bidders).astype(int)
+            print(f"    Strict rotation pairs: {len(strict_rotation)}")
         else:
             result["network_rotation"] = 0
 

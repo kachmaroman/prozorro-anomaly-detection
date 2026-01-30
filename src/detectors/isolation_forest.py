@@ -15,6 +15,14 @@ from sklearn.impute import SimpleImputer
 from typing import Optional, List, Dict, Tuple
 
 
+# Features to log-transform (monetary and count variables with skewed distributions)
+LOG_TRANSFORM_FEATURES = [
+    "total_value", "tender_value", "award_value", "avg_value", "avg_tender_value",
+    "avg_award_value", "total_savings", "median_value",
+    "total_awards", "total_tenders", "contracts_count", "buyer_count",
+]
+
+
 # Default features
 DEFAULT_FEATURES = {
     "tender": [
@@ -213,11 +221,17 @@ class IsolationForestDetector:
         return df[feature_cols], feature_cols
 
     def _preprocess(self, X: pd.DataFrame) -> np.ndarray:
-        """Impute missing values and scale features."""
+        """Log-transform skewed features, impute missing values, and scale."""
+        X_work = X.copy()
+
+        # Log-transform skewed features (monetary and count variables)
+        for col in X_work.columns:
+            if col in LOG_TRANSFORM_FEATURES:
+                X_work[col] = np.log1p(X_work[col].clip(lower=0))  # log(1+x), clip negatives
 
         # Impute missing values
         self.imputer = SimpleImputer(strategy="median")
-        X_imputed = self.imputer.fit_transform(X)
+        X_imputed = self.imputer.fit_transform(X_work)
 
         # Scale features
         if self.scaler_type == "robust":

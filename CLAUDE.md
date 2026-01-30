@@ -16,196 +16,240 @@ master-thesis/
 ├── data/                # Dataset (from prozorro-parser)
 ├── notebooks/           # Jupyter notebooks for analysis
 │   ├── 01_eda.ipynb
-│   ├── 02_rule_based.ipynb         # Level 1: Rule-based
-│   ├── 03_statistical_screens.ipynb # Level 2: Statistical
-│   ├── 04_isolation_forest.ipynb   # Level 3: ML (IF)
-│   ├── 05_hdbscan.ipynb            # Level 3: ML (HDBSCAN + Cartel clusters)
-│   ├── 06_ensemble.ipynb           # Cross-method validation
-│   └── 07_network_analysis.ipynb   # Level 4: Network Analysis
-├── src/                 # Source code for models
+│   ├── 02_rule_based.ipynb            # Level 1: Rule-based
+│   ├── 03_statistical_screens.ipynb   # Level 2: Statistical
+│   ├── 04_isolation_forest.ipynb      # Level 3: ML (IF)
+│   ├── 05_hdbscan.ipynb               # Level 3: ML (HDBSCAN)
+│   ├── 06_ensemble.ipynb              # Cross-method validation
+│   ├── 07_network_analysis.ipynb      # Level 4: Network Analysis
+│   ├── 08_pyod_comparison.ipynb       # PyOD algorithms comparison
+│   └── 09_aggregated_hdbscan.ipynb    # HDBSCAN on aggregated levels
+├── src/                 # Source code
 │   ├── config.py        # Thresholds, paths, constants
-│   ├── data_loader.py   # Optimized data loading (13M+ records)
-│   ├── features/        # Feature engineering (TODO)
-│   ├── detectors/
-│   │   ├── rule_based.py   # 44 red flag rules (DONE)
-│   │   └── statistical.py  # Statistical screens (DONE)
-│   └── evaluation/      # Cross-method validation (TODO)
+│   ├── data_loader.py   # Polars-based data loading (FAST!)
+│   └── detectors/
+│       ├── __init__.py
+│       ├── rule_based.py      # 44 red flag rules
+│       ├── statistical.py     # Statistical screens
+│       ├── isolation_forest.py # Isolation Forest
+│       ├── hdbscan.py         # HDBSCAN + AggregatedHDBSCAN
+│       ├── pyod_detector.py   # PyOD unified interface (7 algorithms)
+│       ├── network.py         # Network/Graph analysis
+│       └── ensemble.py        # Ensemble detector
 ├── results/             # Experiment results and figures
 └── references/          # Research papers
 ```
 
-## Data Location
+## Data Loading (Polars)
 
-Dataset is in `data/` folder (~5.3 GB):
+Data loader uses **Polars** for 10-100x faster loading:
 
-**Tenders (year-based):**
-- `tenders_2022.csv` - 2.4M tenders
-- `tenders_2023.csv` - 3.6M tenders
-- `tenders_2024.csv` - 3.4M tenders
-- `tenders_2025.csv` - 3.7M tenders
-
-**Bids (year-based):**
-- `bids_2022.csv` - 242K bids
-- `bids_2023.csv` - 489K bids
-- `bids_2024.csv` - 847K bids
-- `bids_2025.csv` - 1.1M bids
-
-**Reference tables:**
-- `buyers.csv` - 36K buyers (16 columns)
-- `suppliers.csv` - 359K suppliers (6 columns)
-- `bidders.csv` - 72K bidders (7 columns)
-
-## Key Concept: Information Portrait
-
-Інформаційний портрет - це вектор ~100 кількісних ознак, які описують суб'єкта закупівель:
-
-- **Активність** - тенденції, обсяги, частота участі
-- **Ризикові індикатори** - патерни, не окремі випадки
-- **Темпоральна динаміка** - зміни поведінки у часі
-- **Контекст** - норма для категорії CPV та регіону
-- **Кореляційні патерни** - між індикаторами
-
-**Новизна:** Перехід від статичних "червоних прапорців" до динамічного профілювання поведінки.
-
-**buyers.csv вже містить початок портрету:**
-- `single_bidder_rate`, `competitive_rate` - ризики
-- `supplier_diversity_index` - патерн поведінки
-- `avg_discount_pct`, `total_savings` - ефективність
-- `first/last_tender_date` - темпоральність
-
-## Anomaly Detection Methods
-
-### Rule-based (DONE - `src/detectors/rule_based.py`)
-
-**44 правила** в 6 категоріях (37 активних):
-
-| Категорія | Правил | Приклади |
-|-----------|--------|----------|
-| Process Quality | 3 | R005 missing docs, R013 high limited usage |
-| Competition Quality | 5 | R018 single bidder, R040 buyer-supplier dominance |
-| Price Quality | 11 | R028 identical bids, R053 co-bidding same winner |
-| Procedure Manipulation | 13 | R011 contract splitting, R002 threshold manipulation |
-| Reputation | 2 | R048 heterogeneous supplier, R069 price increase |
-| Additional | 10 | X009 single bidder low discount, X010 same day awards |
-
-**Результати (2023, 10% sample):**
-- Critical: ~2,100 (0.6%)
-- High Risk: ~12,400 (3.5%)
-
-**Використання:**
 ```python
-from src.detectors.rule_based import RuleBasedDetector
+from src.data_loader import load_tenders, load_buyers, load_suppliers
+
+# Load data (returns Pandas by default)
+tenders = load_tenders(years=[2023], sample_frac=0.1)
+buyers = load_buyers()
+
+# Return Polars DataFrame for faster operations
+tenders_pl = load_tenders(years=[2023], return_polars=True)
+
+# Fast aggregations (Polars-native)
+from src.data_loader import aggregate_by_buyer, aggregate_by_supplier, aggregate_by_pair
+buyer_agg = aggregate_by_buyer(tenders)      # Buyer-level features
+supplier_agg = aggregate_by_supplier(tenders) # Supplier-level features
+pair_agg = aggregate_by_pair(tenders)         # Buyer-supplier pairs
+```
+
+## Detectors Overview
+
+### Level 1: Rule-based (`RuleBasedDetector`)
+
+**44 правила** в 6 категоріях:
+
+```python
+from src.detectors import RuleBasedDetector
+
 detector = RuleBasedDetector()
 results = detector.detect(tenders, bids_df=bids)
 print(detector.summary())
 ```
 
-### Statistical Screens (DONE - `src/detectors/statistical.py`)
+### Level 2: Statistical (`StatisticalDetector`)
 
-**Статистичні тести** для конкурентних закупівель (Open/Selective з 3+ учасниками):
+Benford's Law, Z-score, IQR, HHI, Bid Spread:
 
-| Метод | Опис | Застосування |
-|-------|------|--------------|
-| Z-score | Виявляє викиди за стандартним відхиленням | Per-tender (ціни) |
-| IQR | Interquartile range outliers | Per-tender |
-| Benford's Law | Перевірка розподілу перших цифр | **Per-buyer, Per-supplier** (потребує 30+ зразків) |
-| Bid Spread | CV, Min-Max різниця цін | Лише competitive (3+ bidders) |
-| HHI | Herfindahl-Hirschman Index | Концентрація ринку |
-
-**Важливо:** Статистичні тести (bid spread, award ratio) застосовуються ЛИШЕ до:
-- Процедур Open або Selective
-- Тендерів з 3+ учасниками
-
-**Використання:**
 ```python
-from src.detectors.statistical import StatisticalDetector
+from src.detectors import StatisticalDetector
+
 detector = StatisticalDetector()
 results = detector.detect(tenders, bids_df=bids)
-print(detector.summary())
 ```
 
-### Machine Learning (unsupervised)
-| Метод | Опис | Коли використовувати |
-|-------|------|---------------------|
-| **Isolation Forest** | Ізолює аномалії випадковими деревами | **Перший вибір** для табличних даних |
-| **LOF** | Порівнює щільність точки з сусідами | Локальні аномалії |
-| **One-Class SVM** | Границя навколо "нормальних" даних | Менші датасети |
-| **DBSCAN** | Кластеризація, аномалії = шум | Пошук груп (картелі) |
-| **Autoencoder** | Нейронка, аномалії = великий reconstruction error | Складні залежності |
+### Level 3: ML - PyOD (RECOMMENDED)
 
-### Network Analysis (DONE - `notebooks/07_network_analysis.ipynb`)
+**Unified interface for 7 algorithms:**
 
-**Типи графів:**
-| Граф | Вузли | Ребра | Що виявляє |
-|------|-------|-------|------------|
-| Bidder Co-participation | bidder_id | Спільна участь | Картелі |
-| Winner-Loser | bidder_id | Переможець → Програвший | Bid-rigging rings |
-| Buyer-Supplier | buyer + supplier | Контракт | Монопольні відносини |
+| Algorithm | Type | Speed | Description |
+|-----------|------|-------|-------------|
+| `iforest` | Tree-based | Fast | Isolation Forest (default) |
+| `lof` | Density | Medium | Local Outlier Factor |
+| `knn` | Distance | Medium | K-Nearest Neighbors |
+| `hbos` | Histogram | **Fastest** | Histogram-based |
+| `ecod` | Distribution | Fast | Empirical CDF (parameter-free) |
+| `copod` | Distribution | Fast | Copula-based (parameter-free) |
+| `ocsvm` | Boundary | Slow | One-Class SVM |
 
-**Метрики:**
-- Community detection (Louvain) - групи тісно пов'язаних учасників
-- Betweenness centrality - координатори змов
-- Clustering coefficient - замкнуті групи
-- Degree distribution - аномально активні учасники
+```python
+from src.detectors import PyODDetector, compare_algorithms
 
-### Рекомендований pipeline (з methodology_plan.pdf)
+# Single algorithm
+detector = PyODDetector(algorithm="iforest", contamination=0.05)
+results = detector.fit_detect(tenders, buyers_df=buyers)
+
+# Compare multiple algorithms
+comparison = compare_algorithms(
+    tenders,
+    algorithms=["iforest", "hbos", "ecod", "lof"],
+    contamination=0.05
+)
 ```
-Level 1: Rule-based ✓ → Level 2: Statistical ✓ → Level 3: ML (IF, HDBSCAN) ✓ → Level 4: Network Analysis ✓ → Ensemble
+
+### Level 3: ML - HDBSCAN
+
+**Two modes:**
+
+1. **Tender-level** - cluster individual tenders:
+```python
+from src.detectors import HDBSCANDetector
+
+detector = HDBSCANDetector(min_cluster_size=50)
+results = detector.fit_detect(tenders, buyers_df=buyers)
 ```
 
-## Key Features for Models
+2. **Aggregated-level** (RECOMMENDED) - cluster buyers/suppliers/pairs:
+```python
+from src.detectors import AggregatedHDBSCAN
 
-### З tenders:
+detector = AggregatedHDBSCAN(min_cluster_size=10)
+
+# Three levels of analysis
+buyer_results = detector.cluster_buyers(tenders, buyers)
+supplier_results = detector.cluster_suppliers(tenders)
+pair_results = detector.cluster_pairs(tenders, min_contracts=3)
+
+# Get anomalies
+suspicious_buyers = detector.get_suspicious_buyers(min_score=0.5)
+suspicious_suppliers = detector.get_suspicious_suppliers(min_score=0.5)
+suspicious_pairs = detector.get_suspicious_pairs(min_score=0.5)
+```
+
+### Level 4: Network Analysis (`NetworkAnalysisDetector`)
+
+Graph-based detection with configurable thresholds:
+
+```python
+from src.detectors import NetworkAnalysisDetector
+
+detector = NetworkAnalysisDetector(
+    min_co_bids=3,
+    min_contracts=3,
+    # Anomaly thresholds (stricter = fewer flags)
+    suspicious_min_degree=10,
+    suspicious_min_clustering=0.7,
+    rotation_min_ratio=0.7,
+    monopoly_min_ratio=0.9,
+    monopoly_min_contracts=20,
+)
+
+results = detector.detect(tenders, bids_df=bids)
+```
+
+### Ensemble (`EnsembleDetector`)
+
+Combine multiple methods:
+
+```python
+from src.detectors import EnsembleDetector
+
+detector = EnsembleDetector(methods=["rule", "statistical", "iforest"])
+results = detector.fit_detect(tenders, bids_df=bids, buyers_df=buyers)
+```
+
+## Preprocessing Pipeline
+
+All ML detectors use the same preprocessing:
+
+```
+Raw Features → Log-transform (skewed) → Impute (median) → RobustScale → Model
+```
+
+**Log-transformed features** (monetary + counts):
+- `total_value`, `tender_value`, `award_value`, `avg_value`
+- `total_awards`, `total_tenders`, `contracts_count`, `buyer_count`
+
+## Data Location
+
+Dataset in `data/` folder (~5.3 GB):
+
+| File | Records | Description |
+|------|---------|-------------|
+| `tenders_2022.csv` | 2.4M | Tenders |
+| `tenders_2023.csv` | 3.6M | Tenders |
+| `tenders_2024.csv` | 3.4M | Tenders |
+| `tenders_2025.csv` | 3.7M | Tenders |
+| `bids_*.csv` | 2.7M total | Bid-level data |
+| `buyers.csv` | 36K | Buyer profiles |
+| `suppliers.csv` | 359K | Supplier profiles |
+
+## Key Features
+
+### Tender-level:
+- `tender_value`, `award_value`, `price_change_pct`
 - `is_single_bidder`, `is_competitive`, `number_of_tenderers`
-- `price_change_pct`, `tender_value`, `award_value`
 - `is_weekend`, `is_q4`, `is_december`
-- `procurement_method` (limited/open/selective)
 
-### З buyers (приєднати):
+### Buyer-level (from `buyers.csv` or aggregation):
 - `single_bidder_rate`, `competitive_rate`
 - `supplier_diversity_index`
-- `avg_discount_pct`
+- `avg_discount_pct`, `total_value`
 
-### З suppliers (приєднати):
+### Supplier-level:
 - `total_awards`, `total_value`
+- `buyer_count`, `single_bidder_rate`
 
-## Procurement Methods Distribution
-
-| Метод | % | Опис |
-|-------|---|------|
-| Limited | 91% | Прямі договори без торгів |
-| Open | 5.5% | Конкурентні торги |
-| Selective | 3.3% | Запрошені постачальники (зростає) |
+### Pair-level (buyer-supplier):
+- `contracts_count`, `exclusivity_buyer`, `exclusivity_supplier`
 
 ## Current Status
 
 - [x] Dataset parsed (13.1M tenders)
-- [x] Basic EDA completed (`notebooks/01_eda.ipynb`)
-- [x] Kaggle dataset uploaded
-- [x] Buyers "portrait" features (16 columns)
-- [x] Project structure (`src/`)
-- [x] Data loader with memory optimization
-- [x] **Level 1: Rule-based detector (44 rules, 37 active)**
-- [x] **Level 2: Statistical screens (Benford, Z-score, HHI, Bid Spread)**
-- [x] **Level 3: Isolation Forest (19 features, 5% contamination)**
-- [x] **Level 3: HDBSCAN (clustering + outlier detection)**
-- [x] **Level 4: Network Analysis (co-bidding, winner-loser, buyer-supplier graphs)**
-- [x] **Ensemble notebook (cross-method validation)**
+- [x] Polars data loader (10-100x faster)
+- [x] **Level 1:** Rule-based detector (44 rules)
+- [x] **Level 2:** Statistical screens (Benford, Z-score, HHI)
+- [x] **Level 3:** PyOD detector (7 algorithms)
+- [x] **Level 3:** HDBSCAN (tender + aggregated levels)
+- [x] **Level 4:** Network Analysis (configurable thresholds)
+- [x] **Ensemble:** Cross-method validation
+- [x] Log-transform preprocessing
 - [ ] Thesis writing
-
-## Related Projects
-
-- **prozorro-parser/** - Dataset creation and parsing
-  - Location: `C:\Users\kachm\OneDrive\Робочий стіл\prozorro-parser`
-  - Kaggle: https://www.kaggle.com/datasets/romankachmar/prozorro-ukraine-procurement-2022-2025
 
 ## Tech Stack
 
-- Python 3.11+
-- pandas, numpy - data manipulation
-- scikit-learn - ML models (Isolation Forest, LOF, DBSCAN)
-- matplotlib, seaborn - visualization
-- jupyter - notebooks
+- **Python 3.11+**
+- **Polars** - Fast data loading and aggregation
+- **Pandas/NumPy** - ML compatibility
+- **scikit-learn** - Preprocessing, metrics
+- **PyOD** - Anomaly detection algorithms
+- **HDBSCAN** - Clustering
+- **NetworkX** - Graph analysis
+- **Matplotlib/Seaborn** - Visualization
+
+## Related Projects
+
+- **prozorro-parser/** - Dataset creation
+  - Location: `C:\Users\kachm\OneDrive\Робочий стіл\prozorro-parser`
+  - Kaggle: https://www.kaggle.com/datasets/romankachmar/prozorro-ukraine-procurement-2022-2025
 
 ---
 Last updated: 2026-01-30

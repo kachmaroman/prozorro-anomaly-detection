@@ -11,10 +11,20 @@ Author: Roman Kachmar
 
 import numpy as np
 import pandas as pd
+import polars as pl
 from sklearn.preprocessing import RobustScaler
 from sklearn.impute import SimpleImputer
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Union
 from dataclasses import dataclass, field
+
+from ..data_loader import aggregate_by_buyer, aggregate_by_supplier, aggregate_by_pair
+
+# Features to log-transform (monetary and count variables with skewed distributions)
+LOG_TRANSFORM_FEATURES = [
+    "total_value", "tender_value", "award_value", "avg_value", "avg_tender_value",
+    "avg_award_value", "total_savings", "median_value",
+    "total_awards", "total_tenders", "contracts_count", "buyer_count",
+]
 
 try:
     import hdbscan
@@ -245,9 +255,16 @@ class HDBSCANDetector:
         return df[feature_cols], feature_cols
 
     def _preprocess(self, X: pd.DataFrame) -> np.ndarray:
-        """Impute and scale features."""
+        """Log-transform skewed features, impute, and scale."""
+        X_work = X.copy()
+
+        # Log-transform skewed features (monetary and count variables)
+        for col in X_work.columns:
+            if col in LOG_TRANSFORM_FEATURES:
+                X_work[col] = np.log1p(X_work[col].clip(lower=0))
+
         self.imputer = SimpleImputer(strategy="median")
-        X_imputed = self.imputer.fit_transform(X)
+        X_imputed = self.imputer.fit_transform(X_work)
 
         self.scaler = RobustScaler()
         X_scaled = self.scaler.fit_transform(X_imputed)
@@ -334,3 +351,313 @@ class HDBSCANDetector:
             raise ValueError("Run fit_detect() first")
 
         return self.results[self.results["hdbscan_score"] >= min_score]
+
+
+class AggregatedHDBSCAN:
+    """
+    HDBSCAN clustering at aggregated levels: Buyer, Supplier, Buyer-Supplier.
+
+    More effective for detecting:
+    - Groups of suspicious buyers with similar patterns
+    - Supplier cartels (groups working together)
+    - Collusive buyer-supplier relationships
+
+    Usage:
+        detector = AggregatedHDBSCAN()
+
+        # Cluster buyers
+        buyer_results = detector.cluster_buyers(tenders, buyers_df)
+
+        # Cluster suppliers
+        supplier_results = detector.cluster_suppliers(tenders, suppliers_df)
+
+        # Cluster buyer-supplier pairs
+        pair_results = detector.cluster_pairs(tenders)
+    """
+
+    def __init__(
+        self,
+        min_cluster_size: int = 10,
+        min_samples: int = 5,
+        metric: str = "euclidean",
+    ):
+        if not HDBSCAN_AVAILABLE:
+            raise ImportError("hdbscan package not installed. Run: pip install hdbscan")
+
+        self.min_cluster_size = min_cluster_size
+        self.min_samples = min_samples
+        self.metric = metric
+
+        self.buyer_results_ = None
+        self.supplier_results_ = None
+        self.pair_results_ = None
+
+    def _fit_hdbscan(self, X: np.ndarray) -> tuple:
+        """Fit HDBSCAN and return labels, probabilities, scores."""
+        model = hdbscan.HDBSCAN(
+            min_cluster_size=self.min_cluster_size,
+            min_samples=self.min_samples,
+            metric=self.metric,
+            core_dist_n_jobs=-1,
+        )
+        model.fit(X)
+
+        labels = model.labels_
+        probabilities = model.probabilities_
+        outlier_scores = 1 - probabilities
+
+        return labels, probabilities, outlier_scores
+
+    def _preprocess(self, df: pd.DataFrame, feature_cols: List[str]) -> np.ndarray:
+        """Log-transform skewed features, impute, and scale."""
+        X = df[feature_cols].copy()
+
+        # Log-transform skewed features (monetary and count variables)
+        for col in X.columns:
+            if col in LOG_TRANSFORM_FEATURES:
+                X[col] = np.log1p(X[col].clip(lower=0))
+
+        imputer = SimpleImputer(strategy="median")
+        X_imputed = imputer.fit_transform(X)
+
+        scaler = RobustScaler()
+        X_scaled = scaler.fit_transform(X_imputed)
+
+        return X_scaled
+
+    def cluster_buyers(
+        self,
+        tenders: Union[pd.DataFrame, pl.DataFrame],
+        buyers_df: Optional[pd.DataFrame] = None,
+    ) -> pd.DataFrame:
+        """
+        Cluster buyers based on their procurement behavior patterns.
+
+        Features used:
+        - single_bidder_rate: Rate of single-bidder tenders
+        - competitive_rate: Rate of competitive tenders
+        - avg_discount_pct: Average price reduction
+        - supplier_diversity_index: How diverse are their suppliers
+        - total_tenders: Volume of activity
+        - avg_tender_value: Average tender size
+
+        Returns:
+            DataFrame with buyer_id, cluster, score, is_anomaly
+        """
+        print("Clustering BUYERS...")
+
+        # Aggregate if buyers_df not provided or missing features
+        if buyers_df is not None and all(col in buyers_df.columns for col in
+            ["single_bidder_rate", "competitive_rate", "supplier_diversity_index"]):
+            buyer_agg = buyers_df.copy()
+            print(f"  Using pre-computed buyer features")
+        else:
+            print(f"  Computing buyer features from tenders (Polars)...")
+            buyer_agg = aggregate_by_buyer(tenders, return_polars=False)
+
+        # Select features
+        feature_cols = []
+        for col in ["single_bidder_rate", "competitive_rate", "avg_discount_pct",
+                    "supplier_diversity_index", "total_tenders", "avg_tender_value", "total_value"]:
+            if col in buyer_agg.columns:
+                feature_cols.append(col)
+
+        print(f"  Features: {feature_cols}")
+        print(f"  Buyers: {len(buyer_agg):,}")
+
+        # Preprocess and cluster
+        X = self._preprocess(buyer_agg, feature_cols)
+        labels, probs, scores = self._fit_hdbscan(X)
+
+        # Build results
+        result = buyer_agg[["buyer_id"]].copy()
+        result["cluster"] = labels
+        result["probability"] = probs
+        result["outlier_score"] = scores
+        result["is_noise"] = (labels == -1).astype(int)
+        result["is_anomaly"] = (scores >= 0.5).astype(int)  # High outlier score
+
+        # Add features for analysis
+        for col in feature_cols:
+            result[col] = buyer_agg[col].values
+
+        self.buyer_results_ = result
+
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        n_noise = (labels == -1).sum()
+        n_anomaly = result["is_anomaly"].sum()
+
+        print(f"  Clusters: {n_clusters}")
+        print(f"  Noise (outliers): {n_noise:,} ({n_noise/len(result)*100:.1f}%)")
+        print(f"  Anomalies (score>=0.5): {n_anomaly:,} ({n_anomaly/len(result)*100:.1f}%)")
+
+        return result
+
+    def cluster_suppliers(
+        self,
+        tenders: Union[pd.DataFrame, pl.DataFrame],
+        suppliers_df: Optional[pd.DataFrame] = None,
+    ) -> pd.DataFrame:
+        """
+        Cluster suppliers based on their winning patterns.
+
+        Features used:
+        - win_rate: How often they win when bidding
+        - total_awards: Number of contracts won
+        - total_value: Total value of contracts
+        - buyer_count: Number of unique buyers
+        - avg_competitors: Average number of competitors
+        - single_bidder_rate: Rate of winning without competition
+
+        Returns:
+            DataFrame with supplier_id, cluster, score, is_anomaly
+        """
+        print("Clustering SUPPLIERS...")
+
+        # Aggregate from tenders using Polars
+        print(f"  Computing supplier features from tenders (Polars)...")
+        supplier_agg = aggregate_by_supplier(tenders, return_polars=False)
+
+        # Select features
+        feature_cols = []
+        for col in ["total_awards", "total_value", "avg_award_value",
+                    "buyer_count", "single_bidder_rate", "avg_competitors"]:
+            if col in supplier_agg.columns:
+                feature_cols.append(col)
+
+        print(f"  Features: {feature_cols}")
+        print(f"  Suppliers: {len(supplier_agg):,}")
+
+        # Preprocess and cluster
+        X = self._preprocess(supplier_agg, feature_cols)
+        labels, probs, scores = self._fit_hdbscan(X)
+
+        # Build results
+        result = supplier_agg[["supplier_id"]].copy()
+        result["cluster"] = labels
+        result["probability"] = probs
+        result["outlier_score"] = scores
+        result["is_noise"] = (labels == -1).astype(int)
+        result["is_anomaly"] = (scores >= 0.5).astype(int)
+
+        for col in feature_cols:
+            result[col] = supplier_agg[col].values
+
+        self.supplier_results_ = result
+
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        n_noise = (labels == -1).sum()
+        n_anomaly = result["is_anomaly"].sum()
+
+        print(f"  Clusters: {n_clusters}")
+        print(f"  Noise (outliers): {n_noise:,} ({n_noise/len(result)*100:.1f}%)")
+        print(f"  Anomalies (score>=0.5): {n_anomaly:,} ({n_anomaly/len(result)*100:.1f}%)")
+
+        return result
+
+    def cluster_pairs(
+        self,
+        tenders: Union[pd.DataFrame, pl.DataFrame],
+        min_contracts: int = 3,
+    ) -> pd.DataFrame:
+        """
+        Cluster buyer-supplier pairs based on their relationship patterns.
+
+        Features used:
+        - contracts_count: Number of contracts between pair
+        - total_value: Total value of contracts
+        - avg_value: Average contract value
+        - single_bidder_rate: Rate of non-competitive awards
+        - exclusivity_buyer: % of buyer's contracts with this supplier
+        - exclusivity_supplier: % of supplier's contracts with this buyer
+
+        Returns:
+            DataFrame with buyer_id, supplier_id, cluster, score, is_anomaly
+        """
+        print("Clustering BUYER-SUPPLIER PAIRS...")
+
+        # Aggregate by pair using Polars
+        print(f"  Computing pair features from tenders (Polars)...")
+        pair_agg = aggregate_by_pair(tenders, min_contracts=min_contracts, return_polars=False)
+        print(f"  Pairs with {min_contracts}+ contracts: {len(pair_agg):,}")
+
+        if len(pair_agg) < self.min_cluster_size * 2:
+            print(f"  Not enough pairs for clustering. Returning empty.")
+            return pd.DataFrame()
+
+        # Select features
+        feature_cols = [
+            "contracts_count", "total_value", "avg_value",
+            "single_bidder_rate", "exclusivity_buyer", "exclusivity_supplier"
+        ]
+
+        print(f"  Features: {feature_cols}")
+
+        # Preprocess and cluster
+        X = self._preprocess(pair_agg, feature_cols)
+        labels, probs, scores = self._fit_hdbscan(X)
+
+        # Build results
+        result = pair_agg[["buyer_id", "supplier_id"]].copy()
+        result["cluster"] = labels
+        result["probability"] = probs
+        result["outlier_score"] = scores
+        result["is_noise"] = (labels == -1).astype(int)
+        result["is_anomaly"] = (scores >= 0.5).astype(int)
+
+        for col in feature_cols:
+            result[col] = pair_agg[col].values
+
+        self.pair_results_ = result
+
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        n_noise = (labels == -1).sum()
+        n_anomaly = result["is_anomaly"].sum()
+
+        print(f"  Clusters: {n_clusters}")
+        print(f"  Noise (outliers): {n_noise:,} ({n_noise/len(result)*100:.1f}%)")
+        print(f"  Anomalies (score>=0.5): {n_anomaly:,} ({n_anomaly/len(result)*100:.1f}%)")
+
+        return result
+
+    def get_suspicious_buyers(self, min_score: float = 0.5) -> pd.DataFrame:
+        """Get buyers with high outlier scores."""
+        if self.buyer_results_ is None:
+            raise ValueError("Run cluster_buyers() first")
+        return self.buyer_results_[self.buyer_results_["outlier_score"] >= min_score]
+
+    def get_suspicious_suppliers(self, min_score: float = 0.5) -> pd.DataFrame:
+        """Get suppliers with high outlier scores."""
+        if self.supplier_results_ is None:
+            raise ValueError("Run cluster_suppliers() first")
+        return self.supplier_results_[self.supplier_results_["outlier_score"] >= min_score]
+
+    def get_suspicious_pairs(self, min_score: float = 0.5) -> pd.DataFrame:
+        """Get buyer-supplier pairs with high outlier scores."""
+        if self.pair_results_ is None:
+            raise ValueError("Run cluster_pairs() first")
+        return self.pair_results_[self.pair_results_["outlier_score"] >= min_score]
+
+    def summary(self) -> Dict[str, pd.DataFrame]:
+        """Get summary of all clustering results."""
+        summaries = {}
+
+        for name, results in [
+            ("buyers", self.buyer_results_),
+            ("suppliers", self.supplier_results_),
+            ("pairs", self.pair_results_),
+        ]:
+            if results is not None:
+                labels = results["cluster"]
+                n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+
+                summaries[name] = pd.DataFrame([
+                    {"metric": "total", "value": len(results)},
+                    {"metric": "clusters", "value": n_clusters},
+                    {"metric": "noise", "value": results["is_noise"].sum()},
+                    {"metric": "noise_pct", "value": results["is_noise"].mean() * 100},
+                    {"metric": "anomalies", "value": results["is_anomaly"].sum()},
+                    {"metric": "anomaly_pct", "value": results["is_anomaly"].mean() * 100},
+                ])
+
+        return summaries

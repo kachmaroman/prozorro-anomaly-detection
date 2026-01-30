@@ -4,8 +4,9 @@ Anomaly Detection Modules for Public Procurement.
 Available detectors:
 - RuleBasedDetector: Expert rules (red flags)
 - StatisticalDetector: Statistical screens (Benford, Z-score, etc.)
-- IsolationForestDetector: Tree-based anomaly isolation
-- HDBSCANDetector: Clustering + outlier detection
+- PyODDetector: Unified ML detector (IForest, LOF, HBOS, ECOD, etc.)
+- IsolationForestDetector: Tree-based anomaly isolation (legacy)
+- HDBSCANDetector: Clustering + outlier detection (legacy)
 - NetworkAnalysisDetector: Graph-based cartel/collusion detection
 - EnsembleDetector: Combines multiple methods
 
@@ -18,9 +19,12 @@ from .rule_based import RuleBasedDetector, RULE_DEFINITIONS
 # Level 2: Statistical
 from .statistical import StatisticalDetector, benford_test, hhi_index
 
-# Level 3: ML-based
+# Level 3: ML-based (PyOD - recommended)
+from .pyod_detector import PyODDetector, compare_algorithms
+
+# Level 3: ML-based (legacy)
 from .isolation_forest import IsolationForestDetector
-from .hdbscan import HDBSCANDetector
+from .hdbscan import HDBSCANDetector, AggregatedHDBSCAN
 
 # Level 4: Network
 from .network import NetworkAnalysisDetector
@@ -39,9 +43,13 @@ __all__ = [
     "StatisticalDetector",
     "benford_test",
     "hhi_index",
-    # Level 3
+    # Level 3 (PyOD - recommended)
+    "PyODDetector",
+    "compare_algorithms",
+    # Level 3 (legacy)
     "IsolationForestDetector",
     "HDBSCANDetector",
+    "AggregatedHDBSCAN",
     "LOFDetector",
     # Level 4
     "NetworkAnalysisDetector",
