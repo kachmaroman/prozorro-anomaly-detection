@@ -2,11 +2,51 @@
 
 ## Project Overview
 
-**Topic:** Дослідження методів аналізу аномалій у державних закупівлях з використанням машинного навчання
+**Тема:** Інформаційні портрети суб'єктів публічних закупівель: формування та аналіз методами машинного навчання
 
-**Goal:** Develop ML models to detect suspicious patterns and potential fraud in 13M+ government tenders
+**Мета:** Розробка та впровадження методики формування інформаційних портретів суб'єктів публічних закупівель та їх аналізу методами машинного навчання без учителя для виявлення аномальних поведінкових патернів.
+
+**Об'єкт:** Цифрове відображення діяльності суб'єктів публічних закупівель у системі Prozorro
+
+**Предмет:** Інформаційні портрети суб'єктів публічних закупівель та методи ML для їх аналізу
 
 **Advisor:** Сирота Олена
+
+## Core Concept: Інформаційний портрет
+
+**Інформаційний портрет** — це вектор з N агрегованих ознак, що характеризує поведінку суб'єкта закупівель (замовника, постачальника, або пари "замовник-постачальник").
+
+```
+Портрет = [feature_1, feature_2, ..., feature_N]
+```
+
+**Приклад портрета замовника (buyer):**
+```python
+portrait = {
+    'single_bidder_rate': 0.45,      # Частка закупівель з 1 учасником
+    'competitive_rate': 0.55,        # Частка конкурентних процедур
+    'avg_discount_pct': 12.3,        # Середня знижка від початкової ціни
+    'supplier_diversity_index': 0.7, # Диверсифікація постачальників
+    'total_tenders': 150,            # Кількість закупівель
+    'total_value': 5_000_000,        # Загальний обсяг (грн)
+    'avg_tender_value': 33_333,      # Середня вартість закупівлі
+}
+```
+
+**Три рівні портретів:**
+1. **Buyer-level** (~36K) — систематична поведінка замовника
+2. **Supplier-level** (~360K) — патерни перемог постачальника
+3. **Pair-level** (~500K) — взаємодія конкретної пари
+
+**Ключова перевага:** Перехід від аналізу окремих тендерів до аналізу поведінкових патернів суб'єктів дозволяє виявляти систематичні (не разові) відхилення.
+
+**Методи аналізу портретів:**
+- **Isolation Forest** — глобальні аномалії
+- **LOF** — локальні аномалії (нетиповий для свого контексту)
+- **HDBSCAN** — кластеризація + виявлення outliers
+- **Autoencoder** — складні нелінійні патерни
+
+**Thesis documents:** `thesis/intro_updated.md`, `thesis/chapter3_portfolio.md`, `thesis/chapter4_experiments.md`
 
 ## Project Structure
 
@@ -18,12 +58,12 @@ master-thesis/
 │   ├── 01_eda.ipynb
 │   ├── 02_rule_based.ipynb            # Level 1: Rule-based
 │   ├── 03_statistical_screens.ipynb   # Level 2: Statistical
-│   ├── 04_isolation_forest.ipynb      # Level 3: ML (IF)
-│   ├── 05_hdbscan.ipynb               # Level 3: ML (HDBSCAN)
-│   ├── 06_ensemble.ipynb              # Cross-method validation
-│   ├── 07_network_analysis.ipynb      # Level 4: Network Analysis
-│   ├── 08_pyod_comparison.ipynb       # PyOD algorithms comparison
-│   └── 09_aggregated_hdbscan.ipynb    # HDBSCAN on aggregated levels
+│   ├── 04_hdbscan.ipynb               # Level 3: HDBSCAN clustering
+│   ├── 05_ensemble.ipynb              # Cross-method validation
+│   ├── 06_network_analysis.ipynb      # Level 4: Network Analysis
+│   ├── 07_pyod_comparison.ipynb       # PyOD algorithms comparison
+│   ├── 08_aggregated_hdbscan.ipynb    # Aggregated-level analysis
+│   └── 09_autoencoder.ipynb           # Deep learning (Autoencoder)
 ├── src/                 # Source code
 │   ├── config.py        # Thresholds, paths, constants
 │   ├── data_loader.py   # Polars-based data loading (FAST!)
@@ -31,9 +71,9 @@ master-thesis/
 │       ├── __init__.py
 │       ├── rule_based.py      # 44 red flag rules
 │       ├── statistical.py     # Statistical screens
-│       ├── isolation_forest.py # Isolation Forest
-│       ├── hdbscan.py         # HDBSCAN + AggregatedHDBSCAN
-│       ├── pyod_detector.py   # PyOD unified interface (7 algorithms)
+│       ├── pyod_detector.py   # PyOD: PyODDetector + AggregatedPyOD
+│       ├── hdbscan.py         # HDBSCANDetector + AggregatedHDBSCAN
+│       ├── autoencoder.py     # AutoencoderDetector + AggregatedAutoencoder
 │       ├── network.py         # Network/Graph analysis
 │       └── ensemble.py        # Ensemble detector
 ├── results/             # Experiment results and figures
@@ -88,12 +128,13 @@ results = detector.detect(tenders, bids_df=bids)
 
 ### Level 3: ML - PyOD (RECOMMENDED)
 
-**Unified interface for 7 algorithms:**
+**Two levels of analysis:**
+
+#### Tender-level (`PyODDetector`) - 6 algorithms:
 
 | Algorithm | Type | Speed | Description |
 |-----------|------|-------|-------------|
 | `iforest` | Tree-based | Fast | Isolation Forest (default) |
-| `lof` | Density | Medium | Local Outlier Factor |
 | `knn` | Distance | Medium | K-Nearest Neighbors |
 | `hbos` | Histogram | **Fastest** | Histogram-based |
 | `ecod` | Distribution | Fast | Empirical CDF (parameter-free) |
@@ -107,12 +148,27 @@ from src.detectors import PyODDetector, compare_algorithms
 detector = PyODDetector(algorithm="iforest", contamination=0.05)
 results = detector.fit_detect(tenders, buyers_df=buyers)
 
-# Compare multiple algorithms
-comparison = compare_algorithms(
-    tenders,
-    algorithms=["iforest", "hbos", "ecod", "lof"],
-    contamination=0.05
-)
+# Compare algorithms
+comparison = compare_algorithms(tenders, algorithms=["iforest", "hbos", "ecod"])
+```
+
+#### Aggregated-level (`AggregatedPyOD`) - 7 algorithms including LOF:
+
+LOF (Local Outlier Factor) доступний тільки на агрегованому рівні, бо O(n²) — повільний на 13M тендерів.
+
+```python
+from src.detectors import AggregatedPyOD
+
+# LOF on aggregated data (recommended)
+detector = AggregatedPyOD(algorithm="lof", contamination=0.05)
+
+# Three levels of analysis
+buyer_results = detector.detect_buyers(tenders, buyers)
+supplier_results = detector.detect_suppliers(tenders)
+pair_results = detector.detect_pairs(tenders, min_contracts=3)
+
+# Get anomalies
+suspicious = detector.get_anomalies("buyers", min_score=0.5)
 ```
 
 ### Level 3: ML - HDBSCAN
@@ -142,6 +198,24 @@ pair_results = detector.cluster_pairs(tenders, min_contracts=3)
 suspicious_buyers = detector.get_suspicious_buyers(min_score=0.5)
 suspicious_suppliers = detector.get_suspicious_suppliers(min_score=0.5)
 suspicious_pairs = detector.get_suspicious_pairs(min_score=0.5)
+```
+
+### Level 3: ML - Autoencoder (Deep Learning)
+
+Uses reconstruction error as anomaly score:
+
+```python
+from src.detectors import AutoencoderDetector, AggregatedAutoencoder
+
+# Tender-level
+detector = AutoencoderDetector(encoding_dim=8, epochs=50)
+results = detector.fit_detect(tenders, buyers_df=buyers)
+
+# Aggregated-level (recommended)
+detector = AggregatedAutoencoder(encoding_dim=4, epochs=30)
+buyer_results = detector.detect_buyers(tenders, buyers)
+supplier_results = detector.detect_suppliers(tenders)
+pair_results = detector.detect_pairs(tenders, min_contracts=3)
 ```
 
 ### Level 4: Network Analysis (`NetworkAnalysisDetector`)
@@ -223,16 +297,26 @@ Dataset in `data/` folder (~5.3 GB):
 
 ## Current Status
 
+### Code & Experiments
 - [x] Dataset parsed (13.1M tenders)
 - [x] Polars data loader (10-100x faster)
 - [x] **Level 1:** Rule-based detector (44 rules)
 - [x] **Level 2:** Statistical screens (Benford, Z-score, HHI)
-- [x] **Level 3:** PyOD detector (7 algorithms)
+- [x] **Level 3:** PyOD detector (6 tender-level + 7 aggregated with LOF)
 - [x] **Level 3:** HDBSCAN (tender + aggregated levels)
+- [x] **Level 3:** Autoencoder (deep learning, reconstruction error)
 - [x] **Level 4:** Network Analysis (configurable thresholds)
 - [x] **Ensemble:** Cross-method validation
 - [x] Log-transform preprocessing
-- [ ] Thesis writing
+
+### Thesis Writing
+- [x] Вступ (intro_updated.md) — тема, мета, об'єкт, предмет
+- [x] Розділ 3 (chapter3_portfolio.md) — методика формування портретів
+- [x] Розділ 4 (chapter4_experiments.md) — структура експериментів
+- [ ] Розділ 1 — теоретичні засади
+- [ ] Розділ 2 — огляд літератури
+- [ ] Заповнення результатів експериментів
+- [ ] Висновки
 
 ## Tech Stack
 
@@ -242,6 +326,7 @@ Dataset in `data/` folder (~5.3 GB):
 - **scikit-learn** - Preprocessing, metrics
 - **PyOD** - Anomaly detection algorithms
 - **HDBSCAN** - Clustering
+- **PyTorch** - Deep learning (Autoencoders)
 - **igraph** - Fast graph analysis (community detection, centrality)
 - **NetworkX** - Graph utilities and visualization
 - **Matplotlib/Seaborn** - Visualization
@@ -253,4 +338,4 @@ Dataset in `data/` folder (~5.3 GB):
   - Kaggle: https://www.kaggle.com/datasets/romankachmar/prozorro-ukraine-procurement-2022-2025
 
 ---
-Last updated: 2026-01-30
+Last updated: 2026-01-31

@@ -91,7 +91,7 @@ class EnsembleDetector:
         Args:
             rule_results: Results from RuleBasedDetector (with rule_risk_score, rule_anomaly)
             stat_results: Results from StatisticalDetector (with stat_score, stat_anomaly)
-            if_results: Results from IsolationForestDetector (with if_score, if_anomaly)
+            if_results: Results from PyODDetector/IsolationForest (with score/anomaly or if_score/if_anomaly)
             hdbscan_results: Results from HDBSCANDetector (with hdbscan_score, hdbscan_anomaly)
             network_results: Results from NetworkAnalysisDetector (with network_score, network_anomaly)
 
@@ -125,8 +125,9 @@ class EnsembleDetector:
 
         if if_results is not None and "tender_id" in if_results.columns:
             df = if_results[["tender_id"]].copy()
-            df["if_score"] = if_results.get("if_score", 0)
-            df["if_anomaly"] = if_results.get("if_anomaly", 0)
+            # Support both legacy (if_score) and PyOD (score) column names
+            df["if_score"] = if_results.get("if_score", if_results.get("score", 0))
+            df["if_anomaly"] = if_results.get("if_anomaly", if_results.get("anomaly", 0))
             all_dfs.append(df)
             methods_used.append("if")
             print(f"  Isolation Forest: {len(df):,} tenders")

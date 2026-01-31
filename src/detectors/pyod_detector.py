@@ -2,7 +2,7 @@
 PyOD-based Anomaly Detection for Public Procurement.
 
 Unified interface for multiple anomaly detection algorithms using PyOD library.
-Supported algorithms: IForest, LOF, KNN, HBOS, ECOD, COPOD, OCSVM.
+Supported algorithms: IForest, KNN, HBOS, ECOD, COPOD, OCSVM.
 
 Author: Roman Kachmar
 """
@@ -36,11 +36,6 @@ ALGORITHMS = {
         "class": IForest,
         "params": {"n_estimators": 100, "behaviour": "new", "n_jobs": -1},
         "description": "Isolation Forest - isolates anomalies using random trees",
-    },
-    "lof": {
-        "class": LOF,
-        "params": {"n_neighbors": 20, "n_jobs": -1},
-        "description": "Local Outlier Factor - density-based local anomalies",
     },
     "knn": {
         "class": KNN,
@@ -101,12 +96,14 @@ class PyODDetector:
 
     Supports multiple algorithms with the same interface:
     - iforest: Isolation Forest
-    - lof: Local Outlier Factor
     - knn: K-Nearest Neighbors
     - hbos: Histogram-based Outlier Score (fastest)
     - ecod: Empirical Cumulative Distribution
     - copod: Copula-based Outlier Detection
     - ocsvm: One-Class SVM
+
+    Note: LOF is only available at aggregated level via AggregatedPyOD
+    (too slow for 13M+ tender-level records).
 
     Usage:
         detector = PyODDetector(algorithm="iforest", contamination=0.05)
@@ -122,7 +119,7 @@ class PyODDetector:
 
     def __init__(
         self,
-        algorithm: Literal["iforest", "lof", "knn", "hbos", "ecod", "copod", "ocsvm"] = "iforest",
+        algorithm: Literal["iforest", "knn", "hbos", "ecod", "copod", "ocsvm"] = "iforest",
         contamination: float = 0.05,
         features: Optional[Dict[str, List[str]]] = None,
         random_state: int = 42,
@@ -132,7 +129,7 @@ class PyODDetector:
         Initialize PyOD-based detector.
 
         Args:
-            algorithm: Algorithm to use (iforest, lof, knn, hbos, ecod, copod, ocsvm)
+            algorithm: Algorithm to use (iforest, knn, hbos, ecod, copod, ocsvm)
             contamination: Expected proportion of anomalies (0.01-0.5)
             features: Dict with "tender", "buyer", "supplier" feature lists
             random_state: Random seed for reproducibility
@@ -368,3 +365,322 @@ def compare_algorithms(
         })
 
     return pd.DataFrame(results)
+
+
+# Algorithms available for aggregated level (includes LOF)
+AGGREGATED_ALGORITHMS = {
+    **ALGORITHMS,
+    "lof": {
+        "class": LOF,
+        "params": {"n_neighbors": 20, "n_jobs": -1},
+        "description": "Local Outlier Factor - density-based local anomalies",
+    },
+}
+
+
+class AggregatedPyOD:
+    """
+    PyOD-based anomaly detection at aggregated levels: Buyer, Supplier, Pair.
+
+    Works with any PyOD algorithm including LOF (which is too slow for tender-level).
+    More effective for detecting:
+    - Anomalous buyers with unusual procurement patterns
+    - Suspicious suppliers with abnormal winning patterns
+    - Collusive buyer-supplier relationships
+
+    Usage:
+        detector = AggregatedPyOD(algorithm="lof", contamination=0.05)
+
+        # Three levels of analysis
+        buyer_results = detector.detect_buyers(tenders, buyers_df)
+        supplier_results = detector.detect_suppliers(tenders)
+        pair_results = detector.detect_pairs(tenders, min_contracts=3)
+
+        # Get anomalies
+        suspicious_buyers = detector.get_anomalies("buyers", min_score=0.5)
+    """
+
+    def __init__(
+        self,
+        algorithm: Literal["iforest", "lof", "knn", "hbos", "ecod", "copod", "ocsvm"] = "lof",
+        contamination: float = 0.05,
+        random_state: int = 42,
+        **kwargs,
+    ):
+        """
+        Initialize aggregated PyOD detector.
+
+        Args:
+            algorithm: Algorithm to use (lof recommended for aggregated data)
+            contamination: Expected proportion of anomalies (0.01-0.5)
+            random_state: Random seed for reproducibility
+            **kwargs: Additional parameters passed to the algorithm
+        """
+        if algorithm not in AGGREGATED_ALGORITHMS:
+            raise ValueError(f"Unknown algorithm: {algorithm}. Choose from: {list(AGGREGATED_ALGORITHMS.keys())}")
+
+        self.algorithm = algorithm
+        self.contamination = contamination
+        self.random_state = random_state
+        self.extra_params = kwargs
+
+        self.buyer_results_ = None
+        self.supplier_results_ = None
+        self.pair_results_ = None
+
+    def _create_model(self):
+        """Create PyOD model instance."""
+        algo_config = AGGREGATED_ALGORITHMS[self.algorithm]
+        params = {**algo_config["params"], **self.extra_params}
+
+        if "contamination" in algo_config["class"].__init__.__code__.co_varnames:
+            params["contamination"] = self.contamination
+        if "random_state" in algo_config["class"].__init__.__code__.co_varnames:
+            params["random_state"] = self.random_state
+
+        return algo_config["class"](**params)
+
+    def _preprocess(self, df: pd.DataFrame, feature_cols: List[str]) -> np.ndarray:
+        """Log-transform skewed features, impute, and scale."""
+        X = df[feature_cols].copy()
+
+        for col in X.columns:
+            if col in LOG_TRANSFORM_FEATURES:
+                X[col] = np.log1p(X[col].clip(lower=0))
+
+        imputer = SimpleImputer(strategy="median")
+        X_imputed = imputer.fit_transform(X)
+
+        scaler = RobustScaler()
+        X_scaled = scaler.fit_transform(X_imputed)
+
+        return X_scaled
+
+    def _fit_and_score(self, X: np.ndarray) -> tuple:
+        """Fit model and return normalized scores and labels."""
+        model = self._create_model()
+        model.fit(X)
+
+        scores = model.decision_scores_
+        labels = model.labels_
+
+        # Normalize to 0-1
+        scores_norm = (scores - scores.min()) / (scores.max() - scores.min() + 1e-10)
+
+        return scores_norm, labels
+
+    def detect_buyers(
+        self,
+        tenders: pd.DataFrame,
+        buyers_df: Optional[pd.DataFrame] = None,
+    ) -> pd.DataFrame:
+        """
+        Detect anomalous buyers based on their procurement patterns.
+
+        Features used:
+        - single_bidder_rate, competitive_rate
+        - avg_discount_pct, supplier_diversity_index
+        - total_tenders, avg_tender_value, total_value
+
+        Returns:
+            DataFrame with buyer_id, score, anomaly, risk_level
+        """
+        from ..data_loader import aggregate_by_buyer
+
+        print(f"AggregatedPyOD ({self.algorithm.upper()}): Detecting anomalous BUYERS...")
+
+        # Get or compute buyer features
+        if buyers_df is not None and all(col in buyers_df.columns for col in
+            ["single_bidder_rate", "competitive_rate", "supplier_diversity_index"]):
+            buyer_agg = buyers_df.copy()
+            print(f"  Using pre-computed buyer features")
+        else:
+            print(f"  Computing buyer features from tenders...")
+            buyer_agg = aggregate_by_buyer(tenders, return_polars=False)
+
+        # Select features
+        feature_cols = []
+        for col in ["single_bidder_rate", "competitive_rate", "avg_discount_pct",
+                    "supplier_diversity_index", "total_tenders", "avg_tender_value", "total_value"]:
+            if col in buyer_agg.columns:
+                feature_cols.append(col)
+
+        print(f"  Features: {feature_cols}")
+        print(f"  Buyers: {len(buyer_agg):,}")
+
+        # Fit and detect
+        X = self._preprocess(buyer_agg, feature_cols)
+        scores, labels = self._fit_and_score(X)
+
+        # Build results
+        result = buyer_agg[["buyer_id"]].copy()
+        result["score"] = scores
+        result["anomaly"] = labels
+        result["risk_level"] = pd.cut(
+            scores, bins=[0, 0.5, 0.75, 0.9, 1.01],
+            labels=["low", "medium", "high", "critical"]
+        )
+
+        # Add features for analysis
+        for col in feature_cols:
+            result[col] = buyer_agg[col].values
+
+        self.buyer_results_ = result
+
+        n_anomalies = result["anomaly"].sum()
+        print(f"  Anomalies: {n_anomalies:,} ({n_anomalies/len(result)*100:.1f}%)")
+
+        return result
+
+    def detect_suppliers(
+        self,
+        tenders: pd.DataFrame,
+        suppliers_df: Optional[pd.DataFrame] = None,
+    ) -> pd.DataFrame:
+        """
+        Detect anomalous suppliers based on their winning patterns.
+
+        Features used:
+        - total_awards, total_value, avg_award_value
+        - buyer_count, single_bidder_rate, avg_competitors
+
+        Returns:
+            DataFrame with supplier_id, score, anomaly, risk_level
+        """
+        from ..data_loader import aggregate_by_supplier
+
+        print(f"AggregatedPyOD ({self.algorithm.upper()}): Detecting anomalous SUPPLIERS...")
+
+        print(f"  Computing supplier features from tenders...")
+        supplier_agg = aggregate_by_supplier(tenders, return_polars=False)
+
+        # Select features
+        feature_cols = []
+        for col in ["total_awards", "total_value", "avg_award_value",
+                    "buyer_count", "single_bidder_rate", "avg_competitors"]:
+            if col in supplier_agg.columns:
+                feature_cols.append(col)
+
+        print(f"  Features: {feature_cols}")
+        print(f"  Suppliers: {len(supplier_agg):,}")
+
+        # Fit and detect
+        X = self._preprocess(supplier_agg, feature_cols)
+        scores, labels = self._fit_and_score(X)
+
+        # Build results
+        result = supplier_agg[["supplier_id"]].copy()
+        result["score"] = scores
+        result["anomaly"] = labels
+        result["risk_level"] = pd.cut(
+            scores, bins=[0, 0.5, 0.75, 0.9, 1.01],
+            labels=["low", "medium", "high", "critical"]
+        )
+
+        for col in feature_cols:
+            result[col] = supplier_agg[col].values
+
+        self.supplier_results_ = result
+
+        n_anomalies = result["anomaly"].sum()
+        print(f"  Anomalies: {n_anomalies:,} ({n_anomalies/len(result)*100:.1f}%)")
+
+        return result
+
+    def detect_pairs(
+        self,
+        tenders: pd.DataFrame,
+        min_contracts: int = 3,
+    ) -> pd.DataFrame:
+        """
+        Detect anomalous buyer-supplier pairs.
+
+        Features used:
+        - contracts_count, total_value, avg_value
+        - single_bidder_rate
+        - exclusivity_buyer, exclusivity_supplier
+
+        Returns:
+            DataFrame with buyer_id, supplier_id, score, anomaly, risk_level
+        """
+        from ..data_loader import aggregate_by_pair
+
+        print(f"AggregatedPyOD ({self.algorithm.upper()}): Detecting anomalous PAIRS...")
+
+        print(f"  Computing pair features from tenders...")
+        pair_agg = aggregate_by_pair(tenders, min_contracts=min_contracts, return_polars=False)
+        print(f"  Pairs with {min_contracts}+ contracts: {len(pair_agg):,}")
+
+        if len(pair_agg) < 10:
+            print(f"  Not enough pairs for detection. Returning empty.")
+            return pd.DataFrame()
+
+        # Select features
+        feature_cols = [
+            "contracts_count", "total_value", "avg_value",
+            "single_bidder_rate", "exclusivity_buyer", "exclusivity_supplier"
+        ]
+
+        print(f"  Features: {feature_cols}")
+
+        # Fit and detect
+        X = self._preprocess(pair_agg, feature_cols)
+        scores, labels = self._fit_and_score(X)
+
+        # Build results
+        result = pair_agg[["buyer_id", "supplier_id"]].copy()
+        result["score"] = scores
+        result["anomaly"] = labels
+        result["risk_level"] = pd.cut(
+            scores, bins=[0, 0.5, 0.75, 0.9, 1.01],
+            labels=["low", "medium", "high", "critical"]
+        )
+
+        for col in feature_cols:
+            result[col] = pair_agg[col].values
+
+        self.pair_results_ = result
+
+        n_anomalies = result["anomaly"].sum()
+        print(f"  Anomalies: {n_anomalies:,} ({n_anomalies/len(result)*100:.1f}%)")
+
+        return result
+
+    def get_anomalies(
+        self,
+        level: Literal["buyers", "suppliers", "pairs"],
+        min_score: float = 0.5,
+    ) -> pd.DataFrame:
+        """Get entities with score above threshold."""
+        results_map = {
+            "buyers": self.buyer_results_,
+            "suppliers": self.supplier_results_,
+            "pairs": self.pair_results_,
+        }
+
+        results = results_map.get(level)
+        if results is None:
+            raise ValueError(f"Run detect_{level}() first")
+
+        return results[results["score"] >= min_score]
+
+    def summary(self) -> Dict[str, pd.DataFrame]:
+        """Get summary of all detection results."""
+        summaries = {}
+
+        for name, results in [
+            ("buyers", self.buyer_results_),
+            ("suppliers", self.supplier_results_),
+            ("pairs", self.pair_results_),
+        ]:
+            if results is not None:
+                summaries[name] = pd.DataFrame([
+                    {"metric": "algorithm", "value": self.algorithm},
+                    {"metric": "total", "value": len(results)},
+                    {"metric": "anomalies", "value": results["anomaly"].sum()},
+                    {"metric": "anomaly_pct", "value": results["anomaly"].mean() * 100},
+                    {"metric": "critical", "value": (results["risk_level"] == "critical").sum()},
+                    {"metric": "high", "value": (results["risk_level"] == "high").sum()},
+                ])
+
+        return summaries
