@@ -315,16 +315,18 @@ class NetworkAnalysisDetector:
         # Create winner -> loser edges
         for tender_id, group in bids_with_winner.groupby("tender_id"):
             winner_id = group["winner_id"].iloc[0]
-            if pd.isna(winner_id):
+            if pd.isna(winner_id) or winner_id is None:
                 continue
             losers = group[group["bidder_id"] != winner_id]["bidder_id"].unique()
             for loser_id in losers:
+                if pd.isna(loser_id) or loser_id is None:
+                    continue
                 win_lose_edges[(winner_id, loser_id)] += 1
 
         # Build directed graph
         self.G_winlose = nx.DiGraph()
         for (winner, loser), count in win_lose_edges.items():
-            if count >= self.min_co_bids:
+            if count >= self.min_co_bids and winner is not None and loser is not None:
                 self.G_winlose.add_edge(winner, loser, weight=count)
 
         print(f"    Nodes: {self.G_winlose.number_of_nodes():,}")
