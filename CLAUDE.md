@@ -44,7 +44,6 @@ portrait = {
 - **Isolation Forest** — глобальні аномалії
 - **LOF** — локальні аномалії (нетиповий для свого контексту)
 - **HDBSCAN** — кластеризація + виявлення outliers
-- **Autoencoder** — складні нелінійні патерни
 
 **Thesis documents:** `thesis/intro_updated.md`, `thesis/chapter3_portfolio.md`, `thesis/chapter4_experiments.md`
 
@@ -62,7 +61,7 @@ master-thesis/
 │   ├── 05_network_analysis.ipynb      # Network/Graph analysis
 │   ├── 06_pyod_comparison.ipynb       # Tender-level PyOD (fast algorithms)
 │   ├── 07_aggregated_hdbscan.ipynb    # Aggregated HDBSCAN clustering
-│   └── 08_aggregated_pyod.ipynb       # Buyer-level PyOD (KNN, LOF, OCSVM)
+│   └── 08_aggregated_pyod.ipynb       # Aggregated-level PyOD (IForest, LOF, ECOD)
 ├── src/                 # Source code
 │   ├── config.py        # Thresholds, paths, constants
 │   ├── data_loader.py   # Polars-based data loading (FAST!)
@@ -70,7 +69,7 @@ master-thesis/
 │       ├── __init__.py
 │       ├── rule_based.py      # 44 red flag rules
 │       ├── statistical.py     # Statistical screens
-│       ├── pyod_detector.py   # PyOD: tender-level (fast) + aggregated (+ KNN, LOF, OCSVM)
+│       ├── pyod_detector.py   # PyOD: IForest, ECOD + LOF (aggregated)
 │       ├── hdbscan.py         # HDBSCANDetector + AggregatedHDBSCAN
 │       ├── network.py         # Network/Graph analysis
 │       └── ensemble.py        # Ensemble detector
@@ -128,16 +127,12 @@ results = detector.detect(tenders, bids_df=bids)
 
 **Two levels of analysis:**
 
-#### Tender-level (`PyODDetector`) - 6 fast algorithms:
+#### Tender-level (`PyODDetector`) - 2 algorithms:
 
 | Algorithm | Type | Speed | Description |
 |-----------|------|-------|-------------|
 | `iforest` | Tree-based | Fast | Isolation Forest (default) |
-| `hbos` | Histogram | **Fastest** | Histogram-based |
 | `ecod` | Distribution | Fast | Empirical CDF (parameter-free) |
-| `copod` | Distribution | Fast | Copula-based (parameter-free) |
-| `autoencoder` | Neural | Medium | AutoEncoder (reconstruction error) |
-| `vae` | Neural | Medium | Variational AutoEncoder |
 
 ```python
 from src.detectors import PyODDetector, compare_algorithms
@@ -147,12 +142,12 @@ detector = PyODDetector(algorithm="iforest", contamination=0.05)
 results = detector.fit_detect(tenders, buyers_df=buyers)
 
 # Compare algorithms
-comparison = compare_algorithms(tenders, algorithms=["iforest", "hbos", "ecod"])
+comparison = compare_algorithms(tenders, algorithms=["iforest", "ecod"])
 ```
 
-#### Aggregated-level (`AggregatedPyOD`) - 9 algorithms (+ O(n²)):
+#### Aggregated-level (`AggregatedPyOD`) - 3 algorithms (+ LOF):
 
-KNN, LOF, OCSVM доступні тільки на агрегованому рівні, бо O(n²) — повільні на 13M тендерів, але швидкі на 36K buyers.
+LOF доступний тільки на агрегованому рівні, бо O(n²) — повільний на 13M тендерів, але швидкий на 36K buyers.
 
 ```python
 from src.detectors import AggregatedPyOD
@@ -196,28 +191,6 @@ pair_results = detector.cluster_pairs(tenders, min_contracts=3)
 suspicious_buyers = detector.get_suspicious_buyers(min_score=0.5)
 suspicious_suppliers = detector.get_suspicious_suppliers(min_score=0.5)
 suspicious_pairs = detector.get_suspicious_pairs(min_score=0.5)
-```
-
-### Level 3: ML - AutoEncoder / VAE (Deep Learning via PyOD)
-
-Uses reconstruction error as anomaly score:
-
-```python
-from src.detectors import PyODDetector, AggregatedPyOD
-
-# Tender-level AutoEncoder
-detector = PyODDetector(algorithm="autoencoder", contamination=0.05)
-results = detector.fit_detect(tenders, buyers_df=buyers)
-
-# Tender-level VAE
-detector = PyODDetector(algorithm="vae", contamination=0.05)
-results = detector.fit_detect(tenders, buyers_df=buyers)
-
-# Aggregated-level (recommended)
-detector = AggregatedPyOD(algorithm="autoencoder", contamination=0.05)
-buyer_results = detector.detect_buyers(tenders, buyers)
-supplier_results = detector.detect_suppliers(tenders)
-pair_results = detector.detect_pairs(tenders, min_contracts=3)
 ```
 
 ### Level 4: Network Analysis (`NetworkAnalysisDetector`)
@@ -316,7 +289,7 @@ Dataset in `data/` folder (~5.3 GB):
 - [x] **Level 2:** Statistical screens (Benford, Z-score, HHI)
 - [x] **Level 3:** PyOD detector (6 tender-level + 7 aggregated with LOF)
 - [x] **Level 3:** HDBSCAN (tender + aggregated levels)
-- [x] **Level 3:** Autoencoder (deep learning, reconstruction error)
+- [x] **Level 3:** ECOD (Empirical CDF - additional comparison method)
 - [x] **Level 4:** Network Analysis (configurable thresholds)
 - [x] **Ensemble:** Cross-method validation
 - [x] Log-transform preprocessing
@@ -338,7 +311,7 @@ Dataset in `data/` folder (~5.3 GB):
 - **scikit-learn** - Preprocessing, metrics
 - **PyOD** - Anomaly detection algorithms
 - **HDBSCAN** - Clustering
-- **TensorFlow/Keras** - Neural networks (PyOD AutoEncoder, VAE)
+- **igraph** - Fast network analysis
 - **igraph** - Fast graph analysis (community detection, centrality)
 - **NetworkX** - Graph utilities and visualization
 - **Matplotlib/Seaborn** - Visualization

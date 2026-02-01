@@ -5,8 +5,9 @@ This module combines multiple detection methods:
 1. Rule-based (red flags)
 2. Statistical screens
 3. Isolation Forest
-4. HDBSCAN
-5. Network Analysis
+4. ECOD (Empirical CDF)
+5. HDBSCAN
+6. Network Analysis
 
 Cross-method agreement provides stronger anomaly signals.
 
@@ -26,6 +27,7 @@ class EnsembleConfig:
         "rule": 1.0,
         "stat": 0.8,
         "if": 1.0,
+        "ecod": 1.0,
         "hdbscan": 0.8,
         "network": 1.0,
     })
@@ -47,6 +49,7 @@ class EnsembleDetector:
             rule_results=rule_df,
             stat_results=stat_df,
             if_results=if_df,
+            ecod_results=ecod_df,
             hdbscan_results=hdbscan_df,
             network_results=network_df,
         )
@@ -69,6 +72,7 @@ class EnsembleDetector:
             "rule": 1.0,
             "stat": 0.8,
             "if": 1.0,
+            "ecod": 1.0,
             "hdbscan": 0.8,
             "network": 1.0,
         }
@@ -82,6 +86,7 @@ class EnsembleDetector:
         rule_results: Optional[pd.DataFrame] = None,
         stat_results: Optional[pd.DataFrame] = None,
         if_results: Optional[pd.DataFrame] = None,
+        ecod_results: Optional[pd.DataFrame] = None,
         hdbscan_results: Optional[pd.DataFrame] = None,
         network_results: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
@@ -92,6 +97,7 @@ class EnsembleDetector:
             rule_results: Results from RuleBasedDetector (with rule_risk_score, rule_anomaly)
             stat_results: Results from StatisticalDetector (with stat_score, stat_anomaly)
             if_results: Results from PyODDetector/IsolationForest (with score/anomaly or if_score/if_anomaly)
+            ecod_results: Results from PyODDetector/ECOD (with ecod_score/ecod_anomaly)
             hdbscan_results: Results from HDBSCANDetector (with hdbscan_score, hdbscan_anomaly)
             network_results: Results from NetworkAnalysisDetector (with network_score, network_anomaly)
 
@@ -131,6 +137,14 @@ class EnsembleDetector:
             all_dfs.append(df)
             methods_used.append("if")
             print(f"  Isolation Forest: {len(df):,} tenders")
+
+        if ecod_results is not None and "tender_id" in ecod_results.columns:
+            df = ecod_results[["tender_id"]].copy()
+            df["ecod_score"] = ecod_results.get("ecod_score", ecod_results.get("score", 0))
+            df["ecod_anomaly"] = ecod_results.get("ecod_anomaly", ecod_results.get("anomaly", 0))
+            all_dfs.append(df)
+            methods_used.append("ecod")
+            print(f"  ECOD: {len(df):,} tenders")
 
         if hdbscan_results is not None and "tender_id" in hdbscan_results.columns:
             df = hdbscan_results[["tender_id"]].copy()

@@ -8,8 +8,19 @@ Statistical methods for detecting anomalies:
 4. Distribution tests - normality, uniformity
 5. HHI concentration - market concentration index
 6. Bid pattern analysis - clustering, spread
+
+Bid-level Statistical Screens (from methodology_plan):
+- CV (Coefficient of Variation): < 5% = підозріло схожі ставки
+- DIFFP (Price Difference): > 5% = переможець "знав" скільки ставити
+- RDNOR (Relative Distance): > 1.5 = переможець відірвався, решта скупчені
+- KS-stat (Uniformity): > 0.3 = неприродний розподіл ставок
+- Skewness: |skew| > 0.5 = ставки зміщені в один бік
+- Kurtosis: > 2 = ставки або дуже схожі, або є різкі викиди
+
+All bid-level screens apply only to competitive tenders (open/selective) with 3+ bidders.
 """
 
+import warnings
 import pandas as pd
 import numpy as np
 from typing import Optional, Dict, List, Tuple
@@ -348,7 +359,7 @@ class StatisticalDetector:
         return 1 if chi_sq > critical else 0
 
     # =========================================================================
-    # Bid Spread Analysis
+    # Bid Spread Analysis (Statistical Screens from Methodology)
     # =========================================================================
 
     def _detect_bid_spread_anomalies(
@@ -356,20 +367,23 @@ class StatisticalDetector:
         df: pd.DataFrame,
         bids_df: pd.DataFrame
     ) -> pd.DataFrame:
-        """Detect suspicious bid spread patterns (competitive tenders only)."""
+        """
+        Detect suspicious bid spread patterns using statistical screens.
+
+        Screens implemented (from methodology_plan):
+        1. CV (Coefficient of Variation) - подозріло схожі ставки
+        2. DIFFP (Price Difference) - різниця між 1-м і 2-м місцем
+        3. RDNOR (Relative Distance) - відносна відстань переможця
+        4. KS-stat (Uniformity) - рівномірність розподілу
+        5. Skewness - асиметрія розподілу
+        6. Kurtosis - "хвости" розподілу
+
+        All screens apply only to competitive tenders (open/selective) with 3+ bidders.
+        """
         result = df.copy()
 
-        # Calculate bid statistics per tender
-        bid_stats = bids_df.groupby("tender_id").agg({
-            "bid_amount": ["count", "min", "max", "mean", "std"]
-        }).reset_index()
-        bid_stats.columns = ["tender_id", "bid_count", "bid_min", "bid_max", "bid_mean", "bid_std"]
-
-        # Coefficient of variation (CV)
-        bid_stats["bid_cv"] = bid_stats["bid_std"] / bid_stats["bid_mean"].replace(0, np.nan)
-
-        # Spread ratio (max/min)
-        bid_stats["bid_spread"] = bid_stats["bid_max"] / bid_stats["bid_min"].replace(0, np.nan)
+        # Calculate comprehensive bid statistics per tender
+        bid_stats = self._calculate_bid_statistics(bids_df)
 
         # Merge with tenders
         result = result.merge(bid_stats, on="tender_id", how="left")
@@ -377,28 +391,201 @@ class StatisticalDetector:
         # Mask for competitive tenders (Open/Selective) with 3+ bidders
         is_competitive = result["procurement_method"].isin(["open", "selective"])
         has_multiple_bidders = result["bid_count"].fillna(0) >= 3
+        competitive_mask = is_competitive & has_multiple_bidders
 
-        # Flag anomalies - ONLY for competitive tenders with 3+ bidders
+        # =====================================================================
+        # Screen 1: CV (Coefficient of Variation)
+        # Норма: > 10% (ставки різні, конкуренція реальна)
+        # Аномалія: < 5-6% (ставки підозріло схожі)
+        # =====================================================================
+        result["stat_cv_anomaly"] = (
+            competitive_mask &
+            (result["bid_cv"].fillna(999) < 0.05)  # CV < 5%
+        ).astype(int)
+
+        # =====================================================================
+        # Screen 2: DIFFP (Price Difference)
+        # (друга найнижча ставка - найнижча) / найнижча
+        # Норма: < 3% (щільна боротьба за перемогу)
+        # Аномалія: > 5% (переможець "знав" скільки ставити)
+        # =====================================================================
+        result["stat_diffp_anomaly"] = (
+            competitive_mask &
+            (result["bid_diffp"].fillna(0) > 0.05)  # DIFFP > 5%
+        ).astype(int)
+
+        # =====================================================================
+        # Screen 3: RDNOR (Relative Distance to Nearest Other Record)
+        # Δ₁₂ / mean(Δᵢ) - відстань переможця до 2-го vs середня відстань
+        # Норма: ≈ 1 (розриви між ставками рівномірні)
+        # Аномалія: > 1.5 (переможець відірвався, решта скупчені)
+        # =====================================================================
+        result["stat_rdnor_anomaly"] = (
+            competitive_mask &
+            (result["bid_rdnor"].fillna(0) > 1.5)
+        ).astype(int)
+
+        # =====================================================================
+        # Screen 4: KS-stat (Kolmogorov-Smirnov Uniformity Test)
+        # max|F(x) - U(x)| - відхилення від рівномірного розподілу
+        # Норма: < 0.2 (ставки розподілені рівномірно)
+        # Аномалія: > 0.3 (ставки згруповані, неприродний розподіл)
+        # =====================================================================
+        result["stat_ks_anomaly"] = (
+            competitive_mask &
+            (result["bid_ks_stat"].fillna(0) > 0.3)
+        ).astype(int)
+
+        # =====================================================================
+        # Screen 5: Skewness (Asymmetry)
+        # μ₃ / σ³ - асиметрія розподілу ставок
+        # Норма: ≈ 0 (симетричний розподіл ставок)
+        # Аномалія: < -0.5 або > 0.5 (ставки зміщені в один бік)
+        # =====================================================================
+        result["stat_skewness_anomaly"] = (
+            competitive_mask &
+            (result["bid_skewness"].fillna(0).abs() > 0.5)
+        ).astype(int)
+
+        # =====================================================================
+        # Screen 6: Kurtosis (Tail heaviness)
+        # μ₄ / σ⁴ - 3 - "хвости" розподілу
+        # Норма: ≈ 0 (нормальний "хвіст" розподілу)
+        # Аномалія: > 2 (ставки або дуже схожі, або є різкі викиди)
+        # =====================================================================
+        result["stat_kurtosis_anomaly"] = (
+            competitive_mask &
+            (result["bid_kurtosis"].fillna(0) > 2)
+        ).astype(int)
+
+        # =====================================================================
+        # Legacy screens (kept for backwards compatibility)
+        # =====================================================================
+
         # Very low spread (< 1%) - suspiciously similar bids
         result["stat_bid_spread_anomaly"] = (
-            is_competitive &
-            has_multiple_bidders &
+            competitive_mask &
             (result["bid_spread"].fillna(999) < 1.01)
         ).astype(int)
 
-        # Very low CV (< 0.01) - clustered bids
+        # Very low CV (< 1%) - extremely clustered bids (stricter than cv_anomaly)
         result["stat_bid_clustering"] = (
-            is_competitive &
-            has_multiple_bidders &
+            competitive_mask &
             (result["bid_cv"].fillna(999) < 0.01)
         ).astype(int)
 
-        # Very high spread (> 10x) - potential manipulation (competitive only)
+        # Very high spread (> 10x) - potential manipulation
         result["stat_bid_spread_high"] = (
-            is_competitive &
-            has_multiple_bidders &
+            competitive_mask &
             (result["bid_spread"].fillna(0) > 10)
         ).astype(int)
+
+        return result
+
+    def _calculate_bid_statistics(self, bids_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calculate comprehensive bid statistics per tender.
+
+        Returns DataFrame with columns:
+        - bid_count, bid_min, bid_max, bid_mean, bid_std
+        - bid_cv (Coefficient of Variation)
+        - bid_spread (max/min ratio)
+        - bid_diffp (Price Difference: (2nd - 1st) / 1st)
+        - bid_rdnor (Relative Distance)
+        - bid_ks_stat (KS uniformity test)
+        - bid_skewness, bid_kurtosis
+        """
+        # Basic statistics
+        basic_stats = bids_df.groupby("tender_id").agg({
+            "bid_amount": ["count", "min", "max", "mean", "std"]
+        }).reset_index()
+        basic_stats.columns = ["tender_id", "bid_count", "bid_min", "bid_max", "bid_mean", "bid_std"]
+
+        # CV and spread
+        basic_stats["bid_cv"] = basic_stats["bid_std"] / basic_stats["bid_mean"].replace(0, np.nan)
+        basic_stats["bid_spread"] = basic_stats["bid_max"] / basic_stats["bid_min"].replace(0, np.nan)
+
+        # Advanced statistics per tender (requires groupby apply)
+        # Use a list to collect results for better pandas compatibility
+        advanced_results = []
+        for tender_id, group in bids_df.groupby("tender_id")["bid_amount"]:
+            stats = self._compute_advanced_bid_stats(group)
+            stats["tender_id"] = tender_id
+            advanced_results.append(stats)
+
+        advanced_df = pd.DataFrame(advanced_results)
+
+        # Merge basic and advanced
+        bid_stats = basic_stats.merge(advanced_df, on="tender_id", how="left")
+
+        return bid_stats
+
+    def _compute_advanced_bid_stats(self, bids: pd.Series) -> dict:
+        """
+        Compute advanced bid statistics for a single tender.
+
+        Args:
+            bids: Series of bid amounts for one tender
+
+        Returns:
+            dict with diffp, rdnor, ks_stat, skewness, kurtosis
+        """
+        result = {
+            "bid_diffp": np.nan,
+            "bid_rdnor": np.nan,
+            "bid_ks_stat": np.nan,
+            "bid_skewness": np.nan,
+            "bid_kurtosis": np.nan,
+        }
+
+        bids = bids.dropna().sort_values()
+        n = len(bids)
+
+        if n < 3:
+            return result
+
+        bids_arr = bids.values
+
+        # DIFFP: (2nd lowest - 1st lowest) / 1st lowest
+        if bids_arr[0] > 0:
+            result["bid_diffp"] = (bids_arr[1] - bids_arr[0]) / bids_arr[0]
+
+        # RDNOR: Δ₁₂ / mean(Δᵢ)
+        # Δ₁₂ = difference between 1st and 2nd place
+        # mean(Δᵢ) = mean of all consecutive differences
+        if n >= 3:
+            delta_12 = bids_arr[1] - bids_arr[0]
+            all_deltas = np.diff(bids_arr)
+            mean_delta = np.mean(all_deltas)
+            if mean_delta > 0:
+                result["bid_rdnor"] = delta_12 / mean_delta
+
+        # KS-stat: Kolmogorov-Smirnov test against uniform distribution
+        # Normalize bids to [0, 1] range
+        if bids_arr[-1] > bids_arr[0]:
+            normalized = (bids_arr - bids_arr[0]) / (bids_arr[-1] - bids_arr[0])
+            try:
+                ks_stat, _ = kstest(normalized, 'uniform')
+                result["bid_ks_stat"] = ks_stat
+            except Exception:
+                pass
+
+        # Skewness and Kurtosis
+        # Only compute if there's enough variance (avoid precision loss warning)
+        if n >= 3:
+            std = np.std(bids_arr)
+            # Check coefficient of variation - if bids are too similar, skip
+            mean_val = np.mean(bids_arr)
+            cv = std / mean_val if mean_val > 0 else 0
+            if cv > 0.001:  # At least 0.1% variation required
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    try:
+                        result["bid_skewness"] = stats.skew(bids_arr)
+                        result["bid_kurtosis"] = stats.kurtosis(bids_arr)  # Fisher's definition (normal = 0)
+                    except Exception:
+                        pass
+            # If CV ≈ 0, all bids are nearly identical (suspicious! but keep NaN for stats)
 
         return result
 
@@ -447,6 +634,8 @@ class StatisticalDetector:
         result = df.copy()
 
         # Define statistical flag columns and weights
+        # NOTE: benford_buyer, benford_supplier, round_price removed from scoring
+        # (too noisy - 52% flagged). They are still computed for analysis.
         stat_flags = {
             # Value outliers
             "stat_zscore_value": 1,
@@ -455,15 +644,17 @@ class StatisticalDetector:
             "stat_iqr_value_cpv": 2,
             "stat_zscore_discount": 1,
             "stat_iqr_discount": 1,
-            # Price patterns
-            "stat_round_price": 0.5,
-            "stat_very_round_price": 1,
+            # Price patterns (only suspicious ones, not round prices)
             "stat_99_ending": 0.5,
             "stat_award_ratio_suspicious": 1,
-            # Benford (per buyer and per supplier) - low weight due to natural deviations in procurement
-            "stat_benford_buyer": 0.5,
-            "stat_benford_supplier": 1,  # Supplier anomalies are rarer, keep slightly higher
-            # Bid patterns
+            # Bid distribution screens (from methodology_plan) - primary signals
+            "stat_cv_anomaly": 2,        # CV < 5% - підозріло схожі ставки
+            "stat_diffp_anomaly": 2,     # DIFFP > 5% - переможець "знав" ціну
+            "stat_rdnor_anomaly": 2,     # RDNOR > 1.5 - переможець відірвався
+            "stat_ks_anomaly": 1.5,      # KS > 0.3 - неприродний розподіл
+            "stat_skewness_anomaly": 1,  # |Skew| > 0.5 - асиметрія
+            "stat_kurtosis_anomaly": 1,  # Kurt > 2 - аномальні хвости
+            # Legacy bid patterns (kept for compatibility)
             "stat_bid_spread_anomaly": 2,
             "stat_bid_clustering": 2,
             "stat_bid_spread_high": 1,
@@ -481,12 +672,16 @@ class StatisticalDetector:
                 result["stat_score"] += result[flag].fillna(0) * weight
                 result["stat_flags_count"] += result[flag].fillna(0)
 
-        # Calculate risk level
+        # Calculate risk level (adjusted thresholds after removing noisy flags)
         result["stat_risk_level"] = pd.cut(
             result["stat_score"],
-            bins=[-0.1, 1, 3, 6, 100],
+            bins=[-0.1, 1, 4, 8, 100],
             labels=["low", "medium", "high", "critical"]
         )
+
+        # Binary anomaly flag for ensemble (score >= 4 = anomaly)
+        # Raised from 3 to 4 after removing benford/round_price from scoring
+        result["stat_anomaly"] = (result["stat_score"] >= 4).astype(int)
 
         return result
 

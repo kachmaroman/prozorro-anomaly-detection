@@ -3,8 +3,17 @@ PyOD-based Anomaly Detection for Public Procurement.
 
 Unified interface for multiple anomaly detection algorithms using PyOD library.
 
-Tender-level (PyODDetector): IForest, HBOS, ECOD, COPOD, AutoEncoder, VAE
-Aggregated-level (AggregatedPyOD): + KNN, LOF, OCSVM (O(n²) - too slow for 13M tenders)
+Main methods (based on experimental comparison):
+- Tender-level (PyODDetector): IForest, ECOD
+- Aggregated-level (AggregatedPyOD): + LOF (O(n²) - only for aggregated data)
+
+Removed after comparison (high overlap or slow):
+- AutoEncoder: 73% overlap with IForest, slower
+- COPOD: 87% overlap with ECOD
+- HBOS: assumes feature independence, less accurate
+- OCSVM: 84% overlap with KNN, slow
+- VAE: similar to AutoEncoder, slower
+- KNN: replaced by LOF for local anomalies
 
 Author: Roman Kachmar
 """
@@ -22,50 +31,24 @@ LOG_TRANSFORM_FEATURES = [
     "total_awards", "total_tenders", "contracts_count", "buyer_count",
 ]
 
-# PyOD imports
+# PyOD imports (main methods only)
 from pyod.models.iforest import IForest
 from pyod.models.lof import LOF
-from pyod.models.knn import KNN
-from pyod.models.hbos import HBOS
 from pyod.models.ecod import ECOD
-from pyod.models.copod import COPOD
-from pyod.models.ocsvm import OCSVM
-from pyod.models.auto_encoder import AutoEncoder
-from pyod.models.vae import VAE
 
 
 # Algorithm configurations for TENDER-LEVEL (fast algorithms only)
-# KNN, LOF, OCSVM are O(n²) - too slow for 13M tenders, available only in AggregatedPyOD
+# LOF is O(n²) - too slow for 13M tenders, available only in AggregatedPyOD
 ALGORITHMS = {
     "iforest": {
         "class": IForest,
         "params": {"n_estimators": 100, "behaviour": "new", "n_jobs": -1},
         "description": "Isolation Forest - isolates anomalies using random trees",
     },
-    "hbos": {
-        "class": HBOS,
-        "params": {"n_bins": 10},
-        "description": "Histogram-based Outlier Score - very fast, assumption of independence",
-    },
     "ecod": {
         "class": ECOD,
         "params": {"n_jobs": -1},
         "description": "Empirical Cumulative Distribution - unsupervised, parameter-free",
-    },
-    "copod": {
-        "class": COPOD,
-        "params": {"n_jobs": -1},
-        "description": "Copula-based Outlier Detection - fast, parameter-free",
-    },
-    "autoencoder": {
-        "class": AutoEncoder,
-        "params": {"hidden_neuron_list": [32, 16, 8, 16, 32], "epoch_num": 50, "batch_size": 64, "verbose": 0, "device": "cpu"},
-        "description": "AutoEncoder - neural network reconstruction error",
-    },
-    "vae": {
-        "class": VAE,
-        "params": {"encoder_neuron_list": [32, 16], "decoder_neuron_list": [16, 32], "epoch_num": 50, "batch_size": 64, "verbose": 0, "device": "cpu"},
-        "description": "Variational AutoEncoder - probabilistic reconstruction",
     },
 }
 
@@ -101,30 +84,20 @@ class PyODDetector:
 
     Fast algorithms for 13M+ tenders:
     - iforest: Isolation Forest (recommended)
-    - hbos: Histogram-based Outlier Score (fastest)
-    - ecod: Empirical Cumulative Distribution
-    - copod: Copula-based Outlier Detection
-    - autoencoder: Neural network AutoEncoder
-    - vae: Variational AutoEncoder
+    - ecod: Empirical Cumulative Distribution (parameter-free)
 
-    Note: KNN, LOF, OCSVM are O(n²) - only available at aggregated level
+    Note: LOF is O(n²) - only available at aggregated level
     via AggregatedPyOD (36K buyers instead of 13M tenders).
 
     Usage:
         detector = PyODDetector(algorithm="iforest", contamination=0.05)
         results = detector.fit_detect(tenders, buyers_df=buyers)
         print(detector.summary())
-
-        # Compare multiple algorithms
-        for algo in ["iforest", "hbos", "ecod", "autoencoder"]:
-            det = PyODDetector(algorithm=algo)
-            results = det.fit_detect(tenders)
-            print(f"{algo}: {results['anomaly'].sum()} anomalies")
     """
 
     def __init__(
         self,
-        algorithm: Literal["iforest", "hbos", "ecod", "copod", "autoencoder", "vae"] = "iforest",
+        algorithm: Literal["iforest", "ecod"] = "iforest",
         contamination: float = 0.05,
         features: Optional[Dict[str, List[str]]] = None,
         random_state: int = 42,
@@ -134,7 +107,7 @@ class PyODDetector:
         Initialize PyOD-based detector.
 
         Args:
-            algorithm: Algorithm to use (iforest, hbos, ecod, copod, autoencoder, vae)
+            algorithm: Algorithm to use (iforest, ecod)
             contamination: Expected proportion of anomalies (0.01-0.5)
             features: Dict with "tender", "buyer", "supplier" feature lists
             random_state: Random seed for reproducibility
@@ -329,7 +302,7 @@ class PyODDetector:
 
 def compare_algorithms(
     tenders: pd.DataFrame,
-    algorithms: List[str] = ["iforest", "hbos", "ecod"],
+    algorithms: List[str] = ["iforest", "ecod"],
     contamination: float = 0.05,
     sample_size: Optional[int] = None,
     buyers_df: Optional[pd.DataFrame] = None,
@@ -373,23 +346,13 @@ def compare_algorithms(
 
 
 # Algorithms available for AGGREGATED level (includes O(n²) algorithms)
-# All tender-level algorithms + KNN, LOF, OCSVM (too slow for 13M tenders)
+# All tender-level algorithms + LOF (too slow for 13M tenders)
 AGGREGATED_ALGORITHMS = {
     **ALGORITHMS,
-    "knn": {
-        "class": KNN,
-        "params": {"n_neighbors": 5, "n_jobs": -1},
-        "description": "K-Nearest Neighbors - distance-based anomalies",
-    },
     "lof": {
         "class": LOF,
         "params": {"n_neighbors": 20, "n_jobs": -1},
         "description": "Local Outlier Factor - density-based local anomalies",
-    },
-    "ocsvm": {
-        "class": OCSVM,
-        "params": {"kernel": "rbf"},
-        "description": "One-Class SVM - boundary-based detection",
     },
 }
 
@@ -418,7 +381,7 @@ class AggregatedPyOD:
 
     def __init__(
         self,
-        algorithm: Literal["iforest", "lof", "knn", "hbos", "ecod", "copod", "ocsvm", "autoencoder", "vae"] = "lof",
+        algorithm: Literal["iforest", "lof", "ecod"] = "lof",
         contamination: float = 0.05,
         random_state: int = 42,
         **kwargs,
