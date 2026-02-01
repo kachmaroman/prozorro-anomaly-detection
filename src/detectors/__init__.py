@@ -4,8 +4,8 @@ Anomaly Detection Modules for Public Procurement.
 Available detectors:
 - RuleBasedDetector: Expert rules (red flags)
 - StatisticalDetector: Statistical screens (Benford, Z-score, etc.)
-- PyODDetector: Tender-level ML (IForest, KNN, HBOS, ECOD, COPOD, OCSVM, AutoEncoder, VAE)
-- AggregatedPyOD: Buyer/Supplier/Pair-level ML (includes LOF, AutoEncoder, VAE)
+- PyODDetector: Tender-level ML (IForest, HBOS, ECOD, COPOD, AutoEncoder, VAE)
+- AggregatedPyOD: Buyer/Supplier/Pair-level ML (+ KNN, LOF, OCSVM - O(n²) algorithms)
 - HDBSCANDetector: Clustering + outlier detection
 - AggregatedHDBSCAN: Clustering at aggregated levels
 - NetworkAnalysisDetector: Graph-based cartel/collusion detection
@@ -40,9 +40,9 @@ __all__ = [
     "StatisticalDetector",
     "benford_test",
     "hhi_index",
-    # Level 3 (PyOD - includes AutoEncoder, VAE)
-    "PyODDetector",
-    "AggregatedPyOD",
+    # Level 3 (PyOD)
+    "PyODDetector",       # Tender-level: IForest, HBOS, ECOD, COPOD, AE, VAE
+    "AggregatedPyOD",     # Aggregated: + KNN, LOF, OCSVM (O(n²))
     "compare_algorithms",
     # Level 3 (HDBSCAN)
     "HDBSCANDetector",

@@ -2,7 +2,9 @@
 PyOD-based Anomaly Detection for Public Procurement.
 
 Unified interface for multiple anomaly detection algorithms using PyOD library.
-Supported algorithms: IForest, KNN, HBOS, ECOD, COPOD, OCSVM, AutoEncoder, VAE.
+
+Tender-level (PyODDetector): IForest, HBOS, ECOD, COPOD, AutoEncoder, VAE
+Aggregated-level (AggregatedPyOD): + KNN, LOF, OCSVM (O(n²) - too slow for 13M tenders)
 
 Author: Roman Kachmar
 """
@@ -32,17 +34,13 @@ from pyod.models.auto_encoder import AutoEncoder
 from pyod.models.vae import VAE
 
 
-# Algorithm configurations
+# Algorithm configurations for TENDER-LEVEL (fast algorithms only)
+# KNN, LOF, OCSVM are O(n²) - too slow for 13M tenders, available only in AggregatedPyOD
 ALGORITHMS = {
     "iforest": {
         "class": IForest,
         "params": {"n_estimators": 100, "behaviour": "new", "n_jobs": -1},
         "description": "Isolation Forest - isolates anomalies using random trees",
-    },
-    "knn": {
-        "class": KNN,
-        "params": {"n_neighbors": 5, "n_jobs": -1},
-        "description": "K-Nearest Neighbors - distance-based anomalies",
     },
     "hbos": {
         "class": HBOS,
@@ -59,19 +57,14 @@ ALGORITHMS = {
         "params": {"n_jobs": -1},
         "description": "Copula-based Outlier Detection - fast, parameter-free",
     },
-    "ocsvm": {
-        "class": OCSVM,
-        "params": {"kernel": "rbf"},
-        "description": "One-Class SVM - boundary-based detection",
-    },
     "autoencoder": {
         "class": AutoEncoder,
-        "params": {"hidden_neurons": [32, 16, 8, 16, 32], "epochs": 50, "batch_size": 64, "verbose": 0},
+        "params": {"hidden_neuron_list": [32, 16, 8, 16, 32], "epoch_num": 50, "batch_size": 64, "verbose": 0, "device": "cpu"},
         "description": "AutoEncoder - neural network reconstruction error",
     },
     "vae": {
         "class": VAE,
-        "params": {"encoder_neurons": [32, 16], "decoder_neurons": [16, 32], "epochs": 50, "batch_size": 64, "verbose": 0},
+        "params": {"encoder_neuron_list": [32, 16], "decoder_neuron_list": [16, 32], "epoch_num": 50, "batch_size": 64, "verbose": 0, "device": "cpu"},
         "description": "Variational AutoEncoder - probabilistic reconstruction",
     },
 }
@@ -104,20 +97,18 @@ DEFAULT_FEATURES = {
 
 class PyODDetector:
     """
-    Unified anomaly detector using PyOD library.
+    Unified anomaly detector using PyOD library for TENDER-LEVEL analysis.
 
-    Supports multiple algorithms with the same interface:
+    Fast algorithms for 13M+ tenders:
     - iforest: Isolation Forest (recommended)
-    - knn: K-Nearest Neighbors
     - hbos: Histogram-based Outlier Score (fastest)
     - ecod: Empirical Cumulative Distribution
     - copod: Copula-based Outlier Detection
-    - ocsvm: One-Class SVM
     - autoencoder: Neural network AutoEncoder
     - vae: Variational AutoEncoder
 
-    Note: LOF is only available at aggregated level via AggregatedPyOD
-    (too slow for 13M+ tender-level records).
+    Note: KNN, LOF, OCSVM are O(n²) - only available at aggregated level
+    via AggregatedPyOD (36K buyers instead of 13M tenders).
 
     Usage:
         detector = PyODDetector(algorithm="iforest", contamination=0.05)
@@ -133,7 +124,7 @@ class PyODDetector:
 
     def __init__(
         self,
-        algorithm: Literal["iforest", "knn", "hbos", "ecod", "copod", "ocsvm", "autoencoder", "vae"] = "iforest",
+        algorithm: Literal["iforest", "hbos", "ecod", "copod", "autoencoder", "vae"] = "iforest",
         contamination: float = 0.05,
         features: Optional[Dict[str, List[str]]] = None,
         random_state: int = 42,
@@ -143,7 +134,7 @@ class PyODDetector:
         Initialize PyOD-based detector.
 
         Args:
-            algorithm: Algorithm to use (iforest, knn, hbos, ecod, copod, ocsvm, autoencoder, vae)
+            algorithm: Algorithm to use (iforest, hbos, ecod, copod, autoencoder, vae)
             contamination: Expected proportion of anomalies (0.01-0.5)
             features: Dict with "tender", "buyer", "supplier" feature lists
             random_state: Random seed for reproducibility
@@ -381,14 +372,24 @@ def compare_algorithms(
     return pd.DataFrame(results)
 
 
-# Algorithms available for aggregated level (includes LOF)
-# All tender-level algorithms + LOF (too slow for tender-level)
+# Algorithms available for AGGREGATED level (includes O(n²) algorithms)
+# All tender-level algorithms + KNN, LOF, OCSVM (too slow for 13M tenders)
 AGGREGATED_ALGORITHMS = {
     **ALGORITHMS,
+    "knn": {
+        "class": KNN,
+        "params": {"n_neighbors": 5, "n_jobs": -1},
+        "description": "K-Nearest Neighbors - distance-based anomalies",
+    },
     "lof": {
         "class": LOF,
         "params": {"n_neighbors": 20, "n_jobs": -1},
         "description": "Local Outlier Factor - density-based local anomalies",
+    },
+    "ocsvm": {
+        "class": OCSVM,
+        "params": {"kernel": "rbf"},
+        "description": "One-Class SVM - boundary-based detection",
     },
 }
 

@@ -70,6 +70,8 @@ class NetworkAnalysisDetector:
         rotation_min_interactions: int = 5,
         monopoly_min_ratio: float = 0.9,
         monopoly_min_contracts: int = 20,
+        # Optional features
+        build_full_collusion: bool = False,
     ):
         """
         Initialize Network Analysis detector.
@@ -84,6 +86,7 @@ class NetworkAnalysisDetector:
             rotation_min_interactions: Min total interactions for rotation
             monopoly_min_ratio: Min dominance ratio for monopoly flag
             monopoly_min_contracts: Min total contracts for monopoly flag
+            build_full_collusion: Build full collusion graph (slow, optional)
         """
         if not NETWORKX_AVAILABLE:
             raise ImportError("networkx package not installed. Run: pip install networkx")
@@ -100,16 +103,22 @@ class NetworkAnalysisDetector:
         self.monopoly_min_ratio = monopoly_min_ratio
         self.monopoly_min_contracts = monopoly_min_contracts
 
+        # Optional features
+        self.build_full_collusion = build_full_collusion
+
         # Graphs
         self.G_cobid = None  # Co-bidding graph
         self.G_winlose = None  # Winner-loser graph
         self.G_buyer_supplier = None  # Buyer-supplier graph
+        self.G_full_collusion = None  # Full collusion graph (all combined)
 
         # Results
         self.cobid_communities = None
         self.cobid_metrics = None
         self.rotation_pairs = None
         self.monopolistic_pairs = None
+        self.full_collusion_communities = None  # Communities in full graph
+        self.full_collusion_metrics = None  # Node metrics in full graph
         self.results = None
 
     def fit_detect(
@@ -143,20 +152,27 @@ class NetworkAnalysisDetector:
             print(f"  Bids in competitive: {len(bids_competitive):,}")
 
             # Build co-bidding network
-            print("\nStep 1/4: Building co-bidding network...")
+            print("\nStep 1/5: Building co-bidding network...")
             self._build_cobid_network(bids_competitive)
 
             # Analyze co-bidding communities
-            print("Step 2/4: Detecting communities...")
+            print("Step 2/5: Detecting communities...")
             self._analyze_cobid_communities()
 
             # Build winner-loser network
-            print("Step 3/4: Building winner-loser network...")
+            print("Step 3/5: Building winner-loser network...")
             self._build_winlose_network(bids_competitive, competitive)
 
         # Build buyer-supplier network
-        print("Step 4/4: Building buyer-supplier network...")
+        print("Step 4/5: Building buyer-supplier network...")
         self._build_buyer_supplier_network(tenders)
+
+        # Build full collusion graph (combines all three) - OPTIONAL
+        if self.build_full_collusion:
+            print("Step 5/5: Building full collusion graph...")
+            self._build_full_collusion_graph()
+        else:
+            print("Step 5/5: Skipping full collusion graph (disabled)")
 
         # Compute tender-level results
         print("\nComputing tender-level results...")
@@ -401,6 +417,139 @@ class NetworkAnalysisDetector:
         ])
         print(f"    Monopolistic pairs (>=80%, >=10 contracts): {n_monopolistic}")
 
+    def _build_full_collusion_graph(self) -> None:
+        """
+        Build full collusion graph combining all three networks.
+
+        Nodes:
+        - B_{buyer_id} - buyers
+        - S_{supplier_id} - suppliers/bidders
+
+        Edges:
+        - contract: buyer <-> supplier (from buyer-supplier network)
+        - cobid: supplier <-> supplier (from co-bidding network)
+        - winlose: supplier <-> supplier (from winner-loser network)
+
+        This unified graph enables detection of complex collusion schemes
+        that span across buyers, suppliers, and their relationships.
+        """
+        self.G_full_collusion = nx.Graph()
+
+        # 1. Add buyer-supplier edges (contract relationships)
+        if self.G_buyer_supplier is not None:
+            for u, v, data in self.G_buyer_supplier.edges(data=True):
+                self.G_full_collusion.add_edge(u, v, edge_type="contract", **data)
+
+        # 2. Add co-bidding edges (bidders who participate together)
+        if self.G_cobid is not None:
+            for u, v, data in self.G_cobid.edges(data=True):
+                # Add S_ prefix if not already present
+                node_u = f"S_{u}" if not str(u).startswith("S_") else u
+                node_v = f"S_{v}" if not str(v).startswith("S_") else v
+
+                # Add or update edge
+                if self.G_full_collusion.has_edge(node_u, node_v):
+                    self.G_full_collusion[node_u][node_v]["cobid_weight"] = data.get("weight", 1)
+                else:
+                    self.G_full_collusion.add_edge(node_u, node_v, edge_type="cobid", **data)
+
+        # 3. Add winner-loser edges (competition relationships)
+        if self.G_winlose is not None:
+            for u, v, data in self.G_winlose.edges(data=True):
+                node_u = f"S_{u}" if not str(u).startswith("S_") else u
+                node_v = f"S_{v}" if not str(v).startswith("S_") else v
+
+                if self.G_full_collusion.has_edge(node_u, node_v):
+                    self.G_full_collusion[node_u][node_v]["winlose_weight"] = data.get("weight", 1)
+                else:
+                    self.G_full_collusion.add_edge(node_u, node_v, edge_type="winlose", **data)
+
+        print(f"    Full collusion graph:")
+        print(f"      Nodes: {self.G_full_collusion.number_of_nodes():,}")
+        print(f"      Edges: {self.G_full_collusion.number_of_edges():,}")
+
+        # Analyze communities in full graph
+        if self.G_full_collusion.number_of_nodes() > 0:
+            self._analyze_full_collusion_communities()
+
+    def _analyze_full_collusion_communities(self) -> None:
+        """Detect communities in the full collusion graph using igraph for speed."""
+        if not IGRAPH_AVAILABLE:
+            print("    igraph not available, skipping full collusion analysis")
+            return
+
+        print("    Detecting communities in full collusion graph...")
+
+        # Convert to igraph
+        nodes = list(self.G_full_collusion.nodes())
+        node_to_idx = {node: i for i, node in enumerate(nodes)}
+
+        g_ig = ig.Graph()
+        g_ig.add_vertices(len(nodes))
+        g_ig.vs["name"] = nodes
+        g_ig.vs["type"] = ["buyer" if str(n).startswith("B_") else "supplier" for n in nodes]
+
+        edges = list(self.G_full_collusion.edges(data=True))
+        edge_list = [(node_to_idx[e[0]], node_to_idx[e[1]]) for e in edges]
+        weights = [e[2].get("weight", 1) for e in edges]
+        g_ig.add_edges(edge_list)
+        g_ig.es["weight"] = weights
+
+        # Community detection (Louvain/Multilevel)
+        communities = g_ig.community_multilevel(weights="weight")
+        partition = {nodes[i]: communities.membership[i] for i in range(len(nodes))}
+        self.full_collusion_communities = partition
+
+        # Count community sizes
+        community_sizes = defaultdict(int)
+        for node, comm_id in partition.items():
+            community_sizes[comm_id] += 1
+
+        # Find mixed communities (containing both buyers and suppliers)
+        mixed_communities = []
+        for comm_id in set(partition.values()):
+            comm_nodes = [n for n, c in partition.items() if c == comm_id]
+            buyers = [n for n in comm_nodes if str(n).startswith("B_")]
+            suppliers = [n for n in comm_nodes if str(n).startswith("S_")]
+
+            if len(buyers) > 0 and len(suppliers) > 0 and len(comm_nodes) >= self.min_community_size:
+                mixed_communities.append({
+                    "community_id": comm_id,
+                    "total_nodes": len(comm_nodes),
+                    "buyers": len(buyers),
+                    "suppliers": len(suppliers),
+                    "buyer_ids": [b.replace("B_", "") for b in buyers],
+                    "supplier_ids": [s.replace("S_", "") for s in suppliers],
+                })
+
+        # Store metrics
+        self.full_collusion_metrics = pd.DataFrame(mixed_communities)
+
+        n_communities = len(set(partition.values()))
+        n_mixed = len(mixed_communities)
+        print(f"      Total communities: {n_communities}")
+        print(f"      Mixed communities (buyers + suppliers): {n_mixed}")
+
+    def get_collusion_communities(self, min_size: int = 3) -> pd.DataFrame:
+        """
+        Get potential collusion communities from full collusion graph.
+
+        Returns communities that contain both buyers and suppliers,
+        indicating potential complex collusion schemes.
+
+        Args:
+            min_size: Minimum community size
+
+        Returns:
+            DataFrame with community details
+        """
+        if self.full_collusion_metrics is None or len(self.full_collusion_metrics) == 0:
+            return pd.DataFrame()
+
+        return self.full_collusion_metrics[
+            self.full_collusion_metrics["total_nodes"] >= min_size
+        ].sort_values("total_nodes", ascending=False)
+
     def _compute_tender_results(
         self,
         tenders: pd.DataFrame,
@@ -532,6 +681,20 @@ class NetworkAnalysisDetector:
 
         if self.monopolistic_pairs is not None:
             summary_data.append({"metric": "monopolistic_pairs", "value": len(self.monopolistic_pairs)})
+
+        if self.G_full_collusion is not None:
+            summary_data.extend([
+                {"metric": "full_collusion_nodes", "value": self.G_full_collusion.number_of_nodes()},
+                {"metric": "full_collusion_edges", "value": self.G_full_collusion.number_of_edges()},
+            ])
+
+        if self.full_collusion_communities is not None:
+            n_total = len(set(self.full_collusion_communities.values()))
+            summary_data.append({"metric": "full_collusion_communities", "value": n_total})
+
+        if self.full_collusion_metrics is not None and len(self.full_collusion_metrics) > 0:
+            n_mixed = len(self.full_collusion_metrics)
+            summary_data.append({"metric": "mixed_communities", "value": n_mixed})
 
         if self.results is not None:
             n_flagged = self.results["network_anomaly"].sum()

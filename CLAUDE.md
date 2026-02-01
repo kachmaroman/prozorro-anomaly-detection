@@ -60,8 +60,9 @@ master-thesis/
 │   ├── 03_statistical_screens.ipynb   # Level 2: Statistical
 │   ├── 04_ensemble.ipynb              # Cross-method validation
 │   ├── 05_network_analysis.ipynb      # Network/Graph analysis
-│   ├── 06_pyod_comparison.ipynb       # PyOD algorithms (IF, LOF, AE, VAE, etc.)
-│   └── 07_aggregated_hdbscan.ipynb    # Aggregated HDBSCAN clustering
+│   ├── 06_pyod_comparison.ipynb       # Tender-level PyOD (fast algorithms)
+│   ├── 07_aggregated_hdbscan.ipynb    # Aggregated HDBSCAN clustering
+│   └── 08_aggregated_pyod.ipynb       # Buyer-level PyOD (KNN, LOF, OCSVM)
 ├── src/                 # Source code
 │   ├── config.py        # Thresholds, paths, constants
 │   ├── data_loader.py   # Polars-based data loading (FAST!)
@@ -69,7 +70,7 @@ master-thesis/
 │       ├── __init__.py
 │       ├── rule_based.py      # 44 red flag rules
 │       ├── statistical.py     # Statistical screens
-│       ├── pyod_detector.py   # PyOD: all ML algorithms (IForest, LOF, AutoEncoder, VAE, etc.)
+│       ├── pyod_detector.py   # PyOD: tender-level (fast) + aggregated (+ KNN, LOF, OCSVM)
 │       ├── hdbscan.py         # HDBSCANDetector + AggregatedHDBSCAN
 │       ├── network.py         # Network/Graph analysis
 │       └── ensemble.py        # Ensemble detector
@@ -127,16 +128,14 @@ results = detector.detect(tenders, bids_df=bids)
 
 **Two levels of analysis:**
 
-#### Tender-level (`PyODDetector`) - 8 algorithms:
+#### Tender-level (`PyODDetector`) - 6 fast algorithms:
 
 | Algorithm | Type | Speed | Description |
 |-----------|------|-------|-------------|
 | `iforest` | Tree-based | Fast | Isolation Forest (default) |
-| `knn` | Distance | Medium | K-Nearest Neighbors |
 | `hbos` | Histogram | **Fastest** | Histogram-based |
 | `ecod` | Distribution | Fast | Empirical CDF (parameter-free) |
 | `copod` | Distribution | Fast | Copula-based (parameter-free) |
-| `ocsvm` | Boundary | Slow | One-Class SVM |
 | `autoencoder` | Neural | Medium | AutoEncoder (reconstruction error) |
 | `vae` | Neural | Medium | Variational AutoEncoder |
 
@@ -151,10 +150,9 @@ results = detector.fit_detect(tenders, buyers_df=buyers)
 comparison = compare_algorithms(tenders, algorithms=["iforest", "hbos", "ecod"])
 ```
 
-#### Aggregated-level (`AggregatedPyOD`) - 9 algorithms including LOF:
+#### Aggregated-level (`AggregatedPyOD`) - 9 algorithms (+ O(n²)):
 
-LOF (Local Outlier Factor) доступний тільки на агрегованому рівні, бо O(n²) — повільний на 13M тендерів.
-Всі алгоритми tender-level + LOF доступні на агрегованому рівні.
+KNN, LOF, OCSVM доступні тільки на агрегованому рівні, бо O(n²) — повільні на 13M тендерів, але швидкі на 36K buyers.
 
 ```python
 from src.detectors import AggregatedPyOD
@@ -224,7 +222,14 @@ pair_results = detector.detect_pairs(tenders, min_contracts=3)
 
 ### Level 4: Network Analysis (`NetworkAnalysisDetector`)
 
-Graph-based detection with configurable thresholds:
+Graph-based detection with 4 graph types:
+
+| Graph | Nodes | Edges | Detects |
+|-------|-------|-------|---------|
+| Co-bidding | bidders | co-participation | Cartels |
+| Winner-Loser | bidders | winner→loser | Bid rotation |
+| Buyer-Supplier | buyers + suppliers | contracts | Monopoly |
+| **Full Collusion** | **all combined** | **all edges** | **Complex schemes** |
 
 ```python
 from src.detectors import NetworkAnalysisDetector
@@ -232,7 +237,7 @@ from src.detectors import NetworkAnalysisDetector
 detector = NetworkAnalysisDetector(
     min_co_bids=3,
     min_contracts=3,
-    # Anomaly thresholds (stricter = fewer flags)
+    # Anomaly thresholds
     suspicious_min_degree=10,
     suspicious_min_clustering=0.7,
     rotation_min_ratio=0.7,
@@ -240,7 +245,10 @@ detector = NetworkAnalysisDetector(
     monopoly_min_contracts=20,
 )
 
-results = detector.detect(tenders, bids_df=bids)
+results = detector.fit_detect(tenders, bids_df=bids)
+
+# Get collusion communities (buyers + suppliers together)
+collusion_communities = detector.get_collusion_communities(min_size=5)
 ```
 
 ### Ensemble (`EnsembleDetector`)
