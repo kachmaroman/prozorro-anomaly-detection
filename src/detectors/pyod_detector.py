@@ -2,7 +2,7 @@
 PyOD-based Anomaly Detection for Public Procurement.
 
 Unified interface for multiple anomaly detection algorithms using PyOD library.
-Supported algorithms: IForest, KNN, HBOS, ECOD, COPOD, OCSVM.
+Supported algorithms: IForest, KNN, HBOS, ECOD, COPOD, OCSVM, AutoEncoder, VAE.
 
 Author: Roman Kachmar
 """
@@ -28,6 +28,8 @@ from pyod.models.hbos import HBOS
 from pyod.models.ecod import ECOD
 from pyod.models.copod import COPOD
 from pyod.models.ocsvm import OCSVM
+from pyod.models.auto_encoder import AutoEncoder
+from pyod.models.vae import VAE
 
 
 # Algorithm configurations
@@ -62,6 +64,16 @@ ALGORITHMS = {
         "params": {"kernel": "rbf"},
         "description": "One-Class SVM - boundary-based detection",
     },
+    "autoencoder": {
+        "class": AutoEncoder,
+        "params": {"hidden_neurons": [32, 16, 8, 16, 32], "epochs": 50, "batch_size": 64, "verbose": 0},
+        "description": "AutoEncoder - neural network reconstruction error",
+    },
+    "vae": {
+        "class": VAE,
+        "params": {"encoder_neurons": [32, 16], "decoder_neurons": [16, 32], "epochs": 50, "batch_size": 64, "verbose": 0},
+        "description": "Variational AutoEncoder - probabilistic reconstruction",
+    },
 }
 
 
@@ -95,12 +107,14 @@ class PyODDetector:
     Unified anomaly detector using PyOD library.
 
     Supports multiple algorithms with the same interface:
-    - iforest: Isolation Forest
+    - iforest: Isolation Forest (recommended)
     - knn: K-Nearest Neighbors
     - hbos: Histogram-based Outlier Score (fastest)
     - ecod: Empirical Cumulative Distribution
     - copod: Copula-based Outlier Detection
     - ocsvm: One-Class SVM
+    - autoencoder: Neural network AutoEncoder
+    - vae: Variational AutoEncoder
 
     Note: LOF is only available at aggregated level via AggregatedPyOD
     (too slow for 13M+ tender-level records).
@@ -111,7 +125,7 @@ class PyODDetector:
         print(detector.summary())
 
         # Compare multiple algorithms
-        for algo in ["iforest", "hbos", "ecod"]:
+        for algo in ["iforest", "hbos", "ecod", "autoencoder"]:
             det = PyODDetector(algorithm=algo)
             results = det.fit_detect(tenders)
             print(f"{algo}: {results['anomaly'].sum()} anomalies")
@@ -119,7 +133,7 @@ class PyODDetector:
 
     def __init__(
         self,
-        algorithm: Literal["iforest", "knn", "hbos", "ecod", "copod", "ocsvm"] = "iforest",
+        algorithm: Literal["iforest", "knn", "hbos", "ecod", "copod", "ocsvm", "autoencoder", "vae"] = "iforest",
         contamination: float = 0.05,
         features: Optional[Dict[str, List[str]]] = None,
         random_state: int = 42,
@@ -129,7 +143,7 @@ class PyODDetector:
         Initialize PyOD-based detector.
 
         Args:
-            algorithm: Algorithm to use (iforest, knn, hbos, ecod, copod, ocsvm)
+            algorithm: Algorithm to use (iforest, knn, hbos, ecod, copod, ocsvm, autoencoder, vae)
             contamination: Expected proportion of anomalies (0.01-0.5)
             features: Dict with "tender", "buyer", "supplier" feature lists
             random_state: Random seed for reproducibility
@@ -368,6 +382,7 @@ def compare_algorithms(
 
 
 # Algorithms available for aggregated level (includes LOF)
+# All tender-level algorithms + LOF (too slow for tender-level)
 AGGREGATED_ALGORITHMS = {
     **ALGORITHMS,
     "lof": {
@@ -402,7 +417,7 @@ class AggregatedPyOD:
 
     def __init__(
         self,
-        algorithm: Literal["iforest", "lof", "knn", "hbos", "ecod", "copod", "ocsvm"] = "lof",
+        algorithm: Literal["iforest", "lof", "knn", "hbos", "ecod", "copod", "ocsvm", "autoencoder", "vae"] = "lof",
         contamination: float = 0.05,
         random_state: int = 42,
         **kwargs,

@@ -58,12 +58,10 @@ master-thesis/
 │   ├── 01_eda.ipynb
 │   ├── 02_rule_based.ipynb            # Level 1: Rule-based
 │   ├── 03_statistical_screens.ipynb   # Level 2: Statistical
-│   ├── 04_hdbscan.ipynb               # Level 3: HDBSCAN clustering
-│   ├── 05_ensemble.ipynb              # Cross-method validation
-│   ├── 06_network_analysis.ipynb      # Level 4: Network Analysis
-│   ├── 07_pyod_comparison.ipynb       # PyOD algorithms comparison
-│   ├── 08_aggregated_hdbscan.ipynb    # Aggregated-level analysis
-│   └── 09_autoencoder.ipynb           # Deep learning (Autoencoder)
+│   ├── 04_ensemble.ipynb              # Cross-method validation
+│   ├── 05_network_analysis.ipynb      # Network/Graph analysis
+│   ├── 06_pyod_comparison.ipynb       # PyOD algorithms (IF, LOF, AE, VAE, etc.)
+│   └── 07_aggregated_hdbscan.ipynb    # Aggregated HDBSCAN clustering
 ├── src/                 # Source code
 │   ├── config.py        # Thresholds, paths, constants
 │   ├── data_loader.py   # Polars-based data loading (FAST!)
@@ -71,9 +69,8 @@ master-thesis/
 │       ├── __init__.py
 │       ├── rule_based.py      # 44 red flag rules
 │       ├── statistical.py     # Statistical screens
-│       ├── pyod_detector.py   # PyOD: PyODDetector + AggregatedPyOD
+│       ├── pyod_detector.py   # PyOD: all ML algorithms (IForest, LOF, AutoEncoder, VAE, etc.)
 │       ├── hdbscan.py         # HDBSCANDetector + AggregatedHDBSCAN
-│       ├── autoencoder.py     # AutoencoderDetector + AggregatedAutoencoder
 │       ├── network.py         # Network/Graph analysis
 │       └── ensemble.py        # Ensemble detector
 ├── results/             # Experiment results and figures
@@ -130,7 +127,7 @@ results = detector.detect(tenders, bids_df=bids)
 
 **Two levels of analysis:**
 
-#### Tender-level (`PyODDetector`) - 6 algorithms:
+#### Tender-level (`PyODDetector`) - 8 algorithms:
 
 | Algorithm | Type | Speed | Description |
 |-----------|------|-------|-------------|
@@ -140,6 +137,8 @@ results = detector.detect(tenders, bids_df=bids)
 | `ecod` | Distribution | Fast | Empirical CDF (parameter-free) |
 | `copod` | Distribution | Fast | Copula-based (parameter-free) |
 | `ocsvm` | Boundary | Slow | One-Class SVM |
+| `autoencoder` | Neural | Medium | AutoEncoder (reconstruction error) |
+| `vae` | Neural | Medium | Variational AutoEncoder |
 
 ```python
 from src.detectors import PyODDetector, compare_algorithms
@@ -152,9 +151,10 @@ results = detector.fit_detect(tenders, buyers_df=buyers)
 comparison = compare_algorithms(tenders, algorithms=["iforest", "hbos", "ecod"])
 ```
 
-#### Aggregated-level (`AggregatedPyOD`) - 7 algorithms including LOF:
+#### Aggregated-level (`AggregatedPyOD`) - 9 algorithms including LOF:
 
 LOF (Local Outlier Factor) доступний тільки на агрегованому рівні, бо O(n²) — повільний на 13M тендерів.
+Всі алгоритми tender-level + LOF доступні на агрегованому рівні.
 
 ```python
 from src.detectors import AggregatedPyOD
@@ -200,19 +200,23 @@ suspicious_suppliers = detector.get_suspicious_suppliers(min_score=0.5)
 suspicious_pairs = detector.get_suspicious_pairs(min_score=0.5)
 ```
 
-### Level 3: ML - Autoencoder (Deep Learning)
+### Level 3: ML - AutoEncoder / VAE (Deep Learning via PyOD)
 
 Uses reconstruction error as anomaly score:
 
 ```python
-from src.detectors import AutoencoderDetector, AggregatedAutoencoder
+from src.detectors import PyODDetector, AggregatedPyOD
 
-# Tender-level
-detector = AutoencoderDetector(encoding_dim=8, epochs=50)
+# Tender-level AutoEncoder
+detector = PyODDetector(algorithm="autoencoder", contamination=0.05)
+results = detector.fit_detect(tenders, buyers_df=buyers)
+
+# Tender-level VAE
+detector = PyODDetector(algorithm="vae", contamination=0.05)
 results = detector.fit_detect(tenders, buyers_df=buyers)
 
 # Aggregated-level (recommended)
-detector = AggregatedAutoencoder(encoding_dim=4, epochs=30)
+detector = AggregatedPyOD(algorithm="autoencoder", contamination=0.05)
 buyer_results = detector.detect_buyers(tenders, buyers)
 supplier_results = detector.detect_suppliers(tenders)
 pair_results = detector.detect_pairs(tenders, min_contracts=3)
@@ -326,7 +330,7 @@ Dataset in `data/` folder (~5.3 GB):
 - **scikit-learn** - Preprocessing, metrics
 - **PyOD** - Anomaly detection algorithms
 - **HDBSCAN** - Clustering
-- **PyTorch** - Deep learning (Autoencoders)
+- **TensorFlow/Keras** - Neural networks (PyOD AutoEncoder, VAE)
 - **igraph** - Fast graph analysis (community detection, centrality)
 - **NetworkX** - Graph utilities and visualization
 - **Matplotlib/Seaborn** - Visualization
