@@ -24,12 +24,7 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.impute import SimpleImputer
 from typing import Optional, List, Dict, Literal
 
-# Features to log-transform (monetary and count variables with skewed distributions)
-LOG_TRANSFORM_FEATURES = [
-    "total_value", "tender_value", "award_value", "avg_value", "avg_tender_value",
-    "avg_award_value", "total_savings", "median_value",
-    "total_awards", "total_tenders", "contracts_count", "buyer_count",
-]
+from src.config import LOG_TRANSFORM_FEATURES, DEFAULT_ML_FEATURES, DEFAULT_CONTAMINATION
 
 # PyOD imports (main methods only)
 from pyod.models.iforest import IForest
@@ -53,29 +48,7 @@ ALGORITHMS = {
 }
 
 
-# Default features
-DEFAULT_FEATURES = {
-    "tender": [
-        "tender_value",
-        "price_change_pct",
-        "number_of_tenderers",
-        "is_single_bidder",
-        "is_competitive",
-        "is_weekend",
-        "is_q4",
-        "is_december",
-    ],
-    "buyer": [
-        "single_bidder_rate",
-        "competitive_rate",
-        "avg_discount_pct",
-        "supplier_diversity_index",
-    ],
-    "supplier": [
-        "total_awards",
-        "total_value",
-    ],
-}
+DEFAULT_FEATURES = DEFAULT_ML_FEATURES
 
 
 class PyODDetector:
@@ -459,7 +432,7 @@ class AggregatedPyOD:
         Features used:
         - single_bidder_rate, competitive_rate
         - avg_discount_pct, supplier_diversity_index
-        - total_tenders, avg_tender_value, total_value
+        - total_tenders, avg_value, total_value
 
         Returns:
             DataFrame with buyer_id, score, anomaly, risk_level
@@ -480,7 +453,7 @@ class AggregatedPyOD:
         # Select features
         feature_cols = []
         for col in ["single_bidder_rate", "competitive_rate", "avg_discount_pct",
-                    "supplier_diversity_index", "total_tenders", "avg_tender_value", "total_value"]:
+                    "supplier_diversity_index", "total_tenders", "avg_value", "total_value"]:
             if col in buyer_agg.columns:
                 feature_cols.append(col)
 

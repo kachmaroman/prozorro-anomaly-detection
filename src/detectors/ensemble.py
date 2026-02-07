@@ -5,9 +5,8 @@ This module combines multiple detection methods:
 1. Rule-based (red flags)
 2. Statistical screens
 3. Isolation Forest
-4. ECOD (Empirical CDF)
-5. HDBSCAN
-6. Network Analysis
+4. HDBSCAN
+5. Network Analysis
 
 Cross-method agreement provides stronger anomaly signals.
 
@@ -17,21 +16,6 @@ Author: Roman Kachmar
 import numpy as np
 import pandas as pd
 from typing import Optional, List, Dict
-from dataclasses import dataclass, field
-
-
-@dataclass
-class EnsembleConfig:
-    """Configuration for ensemble detector."""
-    weights: Dict[str, float] = field(default_factory=lambda: {
-        "rule": 1.0,
-        "stat": 0.8,
-        "if": 1.0,
-        "ecod": 1.0,
-        "hdbscan": 0.8,
-        "network": 1.0,
-    })
-    consensus_threshold: int = 2  # Minimum methods to flag as anomaly
 
 
 class EnsembleDetector:
@@ -49,7 +33,6 @@ class EnsembleDetector:
             rule_results=rule_df,
             stat_results=stat_df,
             if_results=if_df,
-            ecod_results=ecod_df,
             hdbscan_results=hdbscan_df,
             network_results=network_df,
         )
@@ -72,13 +55,13 @@ class EnsembleDetector:
             "rule": 1.0,
             "stat": 0.8,
             "if": 1.0,
-            "ecod": 1.0,
             "hdbscan": 0.8,
             "network": 1.0,
         }
         self.consensus_threshold = consensus_threshold
 
         self.results = None
+        self.methods_used = []
         self.method_stats = None
 
     def combine(
@@ -86,81 +69,127 @@ class EnsembleDetector:
         rule_results: Optional[pd.DataFrame] = None,
         stat_results: Optional[pd.DataFrame] = None,
         if_results: Optional[pd.DataFrame] = None,
-        ecod_results: Optional[pd.DataFrame] = None,
         hdbscan_results: Optional[pd.DataFrame] = None,
         network_results: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """
         Combine results from multiple detectors.
 
-        Args:
-            rule_results: Results from RuleBasedDetector (with rule_risk_score, rule_anomaly)
-            stat_results: Results from StatisticalDetector (with stat_score, stat_anomaly)
-            if_results: Results from PyODDetector/IsolationForest (with score/anomaly or if_score/if_anomaly)
-            ecod_results: Results from PyODDetector/ECOD (with ecod_score/ecod_anomaly)
-            hdbscan_results: Results from HDBSCANDetector (with hdbscan_score, hdbscan_anomaly)
-            network_results: Results from NetworkAnalysisDetector (with network_score, network_anomaly)
+        Each detector uses its native column names:
+        - RuleBasedDetector: rule_risk_score, rule_flags_count, rule_risk_level
+        - StatisticalDetector: stat_score, stat_anomaly, stat_flags_count
+        - PyODDetector (IForest): score, anomaly
+        - HDBSCANDetector: hdbscan_score, hdbscan_anomaly
+        - NetworkAnalysisDetector: network_score, network_anomaly
 
         Returns:
             DataFrame with ensemble scores and consensus
         """
-        # Collect all results
         all_dfs = []
         methods_used = []
 
+        # --- Rule-based ---
         if rule_results is not None and "tender_id" in rule_results.columns:
             df = rule_results[["tender_id"]].copy()
-            df["rule_score"] = rule_results.get("rule_risk_score", rule_results.get("rule_score", 0))
-            # Normalize to 0-1 if needed
-            if df["rule_score"].max() > 1:
-                df["rule_score"] = df["rule_score"] / df["rule_score"].max()
-            df["rule_anomaly"] = rule_results.get("rule_anomaly", (df["rule_score"] > 0.5).astype(int))
+            # Get raw score and normalize to 0-1
+            raw_score = rule_results.get("rule_risk_score", rule_results.get("rule_score", 0))
+            if isinstance(raw_score, (int, float)):
+                df["rule_score"] = raw_score
+            else:
+                df["rule_score"] = raw_score.values
+            max_score = df["rule_score"].max()
+            if max_score > 1:
+                df["rule_score"] = df["rule_score"] / max_score
+            # Anomaly = has at least 1 flag
+            if "rule_flags_count" in rule_results.columns:
+                df["rule_anomaly"] = (rule_results["rule_flags_count"].values > 0).astype(int)
+            elif "rule_risk_level" in rule_results.columns:
+                df["rule_anomaly"] = rule_results["rule_risk_level"].isin(["high", "critical"]).astype(int).values
+            else:
+                df["rule_anomaly"] = (df["rule_score"] > 0.3).astype(int)
             all_dfs.append(df)
             methods_used.append("rule")
-            print(f"  Rule-based: {len(df):,} tenders")
+            print(f"  Rule-based: {len(df):,} tenders, {df['rule_anomaly'].sum():,} flagged")
 
+        # --- Statistical ---
         if stat_results is not None and "tender_id" in stat_results.columns:
             df = stat_results[["tender_id"]].copy()
-            df["stat_score"] = stat_results.get("stat_score", 0)
-            if df["stat_score"].max() > 1:
-                df["stat_score"] = df["stat_score"] / df["stat_score"].max()
-            df["stat_anomaly"] = stat_results.get("stat_anomaly", (df["stat_score"] > 0.5).astype(int))
+            raw_score = stat_results.get("stat_score", 0)
+            if isinstance(raw_score, (int, float)):
+                df["stat_score"] = raw_score
+            else:
+                df["stat_score"] = raw_score.values
+            max_score = df["stat_score"].max()
+            if max_score > 1:
+                df["stat_score"] = df["stat_score"] / max_score
+            # Use native stat_anomaly if available
+            if "stat_anomaly" in stat_results.columns:
+                df["stat_anomaly"] = stat_results["stat_anomaly"].values
+            elif "stat_flags_count" in stat_results.columns:
+                df["stat_anomaly"] = (stat_results["stat_flags_count"].values > 0).astype(int)
+            else:
+                df["stat_anomaly"] = (df["stat_score"] > 0.3).astype(int)
             all_dfs.append(df)
             methods_used.append("stat")
-            print(f"  Statistical: {len(df):,} tenders")
+            print(f"  Statistical: {len(df):,} tenders, {df['stat_anomaly'].sum():,} flagged")
 
+        # --- Isolation Forest ---
         if if_results is not None and "tender_id" in if_results.columns:
             df = if_results[["tender_id"]].copy()
-            # Support both legacy (if_score) and PyOD (score) column names
-            df["if_score"] = if_results.get("if_score", if_results.get("score", 0))
-            df["if_anomaly"] = if_results.get("if_anomaly", if_results.get("anomaly", 0))
+            # PyODDetector returns 'score' and 'anomaly'
+            if "if_score" in if_results.columns:
+                df["if_score"] = if_results["if_score"].values
+            elif "score" in if_results.columns:
+                df["if_score"] = if_results["score"].values
+            else:
+                df["if_score"] = 0
+            if "if_anomaly" in if_results.columns:
+                df["if_anomaly"] = if_results["if_anomaly"].values
+            elif "anomaly" in if_results.columns:
+                df["if_anomaly"] = if_results["anomaly"].values
+            else:
+                df["if_anomaly"] = 0
             all_dfs.append(df)
             methods_used.append("if")
-            print(f"  Isolation Forest: {len(df):,} tenders")
+            print(f"  Isolation Forest: {len(df):,} tenders, {df['if_anomaly'].sum():,} flagged")
 
-        if ecod_results is not None and "tender_id" in ecod_results.columns:
-            df = ecod_results[["tender_id"]].copy()
-            df["ecod_score"] = ecod_results.get("ecod_score", ecod_results.get("score", 0))
-            df["ecod_anomaly"] = ecod_results.get("ecod_anomaly", ecod_results.get("anomaly", 0))
-            all_dfs.append(df)
-            methods_used.append("ecod")
-            print(f"  ECOD: {len(df):,} tenders")
-
+        # --- HDBSCAN ---
         if hdbscan_results is not None and "tender_id" in hdbscan_results.columns:
             df = hdbscan_results[["tender_id"]].copy()
-            df["hdbscan_score"] = hdbscan_results.get("hdbscan_score", 0)
-            df["hdbscan_anomaly"] = hdbscan_results.get("hdbscan_anomaly", 0)
+            # HDBSCANDetector returns 'hdbscan_score' and 'hdbscan_anomaly'
+            if "hdbscan_score" in hdbscan_results.columns:
+                df["hdbscan_score"] = hdbscan_results["hdbscan_score"].values
+            elif "score" in hdbscan_results.columns:
+                df["hdbscan_score"] = hdbscan_results["score"].values
+            else:
+                df["hdbscan_score"] = 0
+            if "hdbscan_anomaly" in hdbscan_results.columns:
+                df["hdbscan_anomaly"] = hdbscan_results["hdbscan_anomaly"].values
+            elif "anomaly" in hdbscan_results.columns:
+                df["hdbscan_anomaly"] = hdbscan_results["anomaly"].values
+            else:
+                df["hdbscan_anomaly"] = 0
             all_dfs.append(df)
             methods_used.append("hdbscan")
-            print(f"  HDBSCAN: {len(df):,} tenders")
+            print(f"  HDBSCAN: {len(df):,} tenders, {df['hdbscan_anomaly'].sum():,} flagged")
 
+        # --- Network ---
         if network_results is not None and "tender_id" in network_results.columns:
             df = network_results[["tender_id"]].copy()
-            df["network_score"] = network_results.get("network_score", 0)
-            df["network_anomaly"] = network_results.get("network_anomaly", 0)
+            if "network_score" in network_results.columns:
+                df["network_score"] = network_results["network_score"].values
+                max_score = df["network_score"].max()
+                if max_score > 1:
+                    df["network_score"] = df["network_score"] / max_score
+            else:
+                df["network_score"] = 0
+            if "network_anomaly" in network_results.columns:
+                df["network_anomaly"] = network_results["network_anomaly"].values
+            else:
+                df["network_anomaly"] = 0
             all_dfs.append(df)
             methods_used.append("network")
-            print(f"  Network: {len(df):,} tenders")
+            print(f"  Network: {len(df):,} tenders, {df['network_anomaly'].sum():,} flagged")
 
         if len(all_dfs) == 0:
             raise ValueError("No valid results provided")
@@ -245,12 +274,12 @@ class EnsembleDetector:
             stat = {"method": method}
 
             if anomaly_col in self.results.columns:
-                stat["anomalies"] = self.results[anomaly_col].sum()
-                stat["anomaly_pct"] = self.results[anomaly_col].mean() * 100
+                stat["anomalies"] = int(self.results[anomaly_col].sum())
+                stat["anomaly_pct"] = round(self.results[anomaly_col].mean() * 100, 2)
 
             if score_col in self.results.columns:
-                stat["mean_score"] = self.results[score_col].mean()
-                stat["median_score"] = self.results[score_col].median()
+                stat["mean_score"] = round(self.results[score_col].mean(), 4)
+                stat["median_score"] = round(self.results[score_col].median(), 4)
 
             stats.append(stat)
 
@@ -319,7 +348,7 @@ class EnsembleDetector:
             summary_data.append({
                 "metric": f"risk_{risk}",
                 "value": count,
-                "percentage": count / total * 100
+                "percentage": round(count / total * 100, 2)
             })
 
         # Consensus distribution
@@ -328,7 +357,7 @@ class EnsembleDetector:
             summary_data.append({
                 "metric": f"consensus_{i}_methods",
                 "value": count,
-                "percentage": count / total * 100
+                "percentage": round(count / total * 100, 2)
             })
 
         return pd.DataFrame(summary_data)

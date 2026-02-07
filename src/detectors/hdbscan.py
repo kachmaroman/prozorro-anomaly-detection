@@ -15,16 +15,11 @@ import polars as pl
 from sklearn.preprocessing import RobustScaler
 from sklearn.impute import SimpleImputer
 from typing import Optional, List, Dict, Tuple, Union
-from dataclasses import dataclass, field
+
 
 from ..data_loader import aggregate_by_buyer, aggregate_by_supplier, aggregate_by_pair
 
-# Features to log-transform (monetary and count variables with skewed distributions)
-LOG_TRANSFORM_FEATURES = [
-    "total_value", "tender_value", "award_value", "avg_value", "avg_tender_value",
-    "avg_award_value", "total_savings", "median_value",
-    "total_awards", "total_tenders", "contracts_count", "buyer_count",
-]
+from src.config import LOG_TRANSFORM_FEATURES, DEFAULT_ML_FEATURES, DEFAULT_CONTAMINATION
 
 try:
     import hdbscan
@@ -33,39 +28,7 @@ except ImportError:
     HDBSCAN_AVAILABLE = False
 
 
-@dataclass
-class HDBSCANConfig:
-    """Configuration for HDBSCAN detector."""
-    min_cluster_size: int = 50
-    min_samples: int = 10
-    metric: str = "euclidean"
-    cluster_selection_method: str = "eom"  # "eom" or "leaf"
-    contamination: float = 0.05  # For anomaly threshold
-
-
-# Default features for HDBSCAN
-DEFAULT_FEATURES = {
-    "tender": [
-        "tender_value",
-        "price_change_pct",
-        "number_of_tenderers",
-        "is_single_bidder",
-        "is_competitive",
-        "is_weekend",
-        "is_q4",
-        "is_december",
-    ],
-    "buyer": [
-        "single_bidder_rate",
-        "competitive_rate",
-        "avg_discount_pct",
-        "supplier_diversity_index",
-    ],
-    "supplier": [
-        "total_awards",
-        "total_value",
-    ],
-}
+DEFAULT_FEATURES = DEFAULT_ML_FEATURES
 
 
 class HDBSCANDetector:
@@ -380,6 +343,7 @@ class AggregatedHDBSCAN:
         min_cluster_size: int = 10,
         min_samples: int = 5,
         metric: str = "euclidean",
+        contamination: float = 0.05,
     ):
         if not HDBSCAN_AVAILABLE:
             raise ImportError("hdbscan package not installed. Run: pip install hdbscan")
@@ -387,13 +351,14 @@ class AggregatedHDBSCAN:
         self.min_cluster_size = min_cluster_size
         self.min_samples = min_samples
         self.metric = metric
+        self.contamination = contamination
 
         self.buyer_results_ = None
         self.supplier_results_ = None
         self.pair_results_ = None
 
     def _fit_hdbscan(self, X: np.ndarray) -> tuple:
-        """Fit HDBSCAN and return labels, probabilities, scores."""
+        """Fit HDBSCAN and return labels, probabilities, scores, anomaly labels."""
         model = hdbscan.HDBSCAN(
             min_cluster_size=self.min_cluster_size,
             min_samples=self.min_samples,
@@ -406,7 +371,11 @@ class AggregatedHDBSCAN:
         probabilities = model.probabilities_
         outlier_scores = 1 - probabilities
 
-        return labels, probabilities, outlier_scores
+        # Use percentile-based threshold (consistent with PyOD contamination)
+        threshold = np.percentile(outlier_scores, 100 * (1 - self.contamination))
+        anomaly_labels = (outlier_scores >= threshold).astype(int)
+
+        return labels, probabilities, outlier_scores, anomaly_labels
 
     def _preprocess(self, df: pd.DataFrame, feature_cols: List[str]) -> np.ndarray:
         """Log-transform skewed features, impute, and scale."""
@@ -439,7 +408,7 @@ class AggregatedHDBSCAN:
         - avg_discount_pct: Average price reduction
         - supplier_diversity_index: How diverse are their suppliers
         - total_tenders: Volume of activity
-        - avg_tender_value: Average tender size
+        - avg_value: Average tender size
 
         Returns:
             DataFrame with buyer_id, cluster, score, is_anomaly
@@ -458,7 +427,7 @@ class AggregatedHDBSCAN:
         # Select features
         feature_cols = []
         for col in ["single_bidder_rate", "competitive_rate", "avg_discount_pct",
-                    "supplier_diversity_index", "total_tenders", "avg_tender_value", "total_value"]:
+                    "supplier_diversity_index", "total_tenders", "avg_value", "total_value"]:
             if col in buyer_agg.columns:
                 feature_cols.append(col)
 
@@ -467,7 +436,7 @@ class AggregatedHDBSCAN:
 
         # Preprocess and cluster
         X = self._preprocess(buyer_agg, feature_cols)
-        labels, probs, scores = self._fit_hdbscan(X)
+        labels, probs, scores, anomaly_labels = self._fit_hdbscan(X)
 
         # Build results
         result = buyer_agg[["buyer_id"]].copy()
@@ -475,7 +444,7 @@ class AggregatedHDBSCAN:
         result["probability"] = probs
         result["outlier_score"] = scores
         result["is_noise"] = (labels == -1).astype(int)
-        result["is_anomaly"] = (scores >= 0.5).astype(int)  # High outlier score
+        result["is_anomaly"] = anomaly_labels
 
         # Add features for analysis
         for col in feature_cols:
@@ -489,7 +458,7 @@ class AggregatedHDBSCAN:
 
         print(f"  Clusters: {n_clusters}")
         print(f"  Noise (outliers): {n_noise:,} ({n_noise/len(result)*100:.1f}%)")
-        print(f"  Anomalies (score>=0.5): {n_anomaly:,} ({n_anomaly/len(result)*100:.1f}%)")
+        print(f"  Anomalies (top {self.contamination*100:.0f}%): {n_anomaly:,} ({n_anomaly/len(result)*100:.1f}%)")
 
         return result
 
@@ -530,7 +499,7 @@ class AggregatedHDBSCAN:
 
         # Preprocess and cluster
         X = self._preprocess(supplier_agg, feature_cols)
-        labels, probs, scores = self._fit_hdbscan(X)
+        labels, probs, scores, anomaly_labels = self._fit_hdbscan(X)
 
         # Build results
         result = supplier_agg[["supplier_id"]].copy()
@@ -538,7 +507,7 @@ class AggregatedHDBSCAN:
         result["probability"] = probs
         result["outlier_score"] = scores
         result["is_noise"] = (labels == -1).astype(int)
-        result["is_anomaly"] = (scores >= 0.5).astype(int)
+        result["is_anomaly"] = anomaly_labels
 
         for col in feature_cols:
             result[col] = supplier_agg[col].values
@@ -551,7 +520,7 @@ class AggregatedHDBSCAN:
 
         print(f"  Clusters: {n_clusters}")
         print(f"  Noise (outliers): {n_noise:,} ({n_noise/len(result)*100:.1f}%)")
-        print(f"  Anomalies (score>=0.5): {n_anomaly:,} ({n_anomaly/len(result)*100:.1f}%)")
+        print(f"  Anomalies (top {self.contamination*100:.0f}%): {n_anomaly:,} ({n_anomaly/len(result)*100:.1f}%)")
 
         return result
 
@@ -595,7 +564,7 @@ class AggregatedHDBSCAN:
 
         # Preprocess and cluster
         X = self._preprocess(pair_agg, feature_cols)
-        labels, probs, scores = self._fit_hdbscan(X)
+        labels, probs, scores, anomaly_labels = self._fit_hdbscan(X)
 
         # Build results
         result = pair_agg[["buyer_id", "supplier_id"]].copy()
@@ -603,7 +572,7 @@ class AggregatedHDBSCAN:
         result["probability"] = probs
         result["outlier_score"] = scores
         result["is_noise"] = (labels == -1).astype(int)
-        result["is_anomaly"] = (scores >= 0.5).astype(int)
+        result["is_anomaly"] = anomaly_labels
 
         for col in feature_cols:
             result[col] = pair_agg[col].values
@@ -616,7 +585,7 @@ class AggregatedHDBSCAN:
 
         print(f"  Clusters: {n_clusters}")
         print(f"  Noise (outliers): {n_noise:,} ({n_noise/len(result)*100:.1f}%)")
-        print(f"  Anomalies (score>=0.5): {n_anomaly:,} ({n_anomaly/len(result)*100:.1f}%)")
+        print(f"  Anomalies (top {self.contamination*100:.0f}%): {n_anomaly:,} ({n_anomaly/len(result)*100:.1f}%)")
 
         return result
 

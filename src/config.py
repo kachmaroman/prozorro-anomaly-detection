@@ -104,5 +104,40 @@ CPV_NAMES = {
     30: "Офісна техніка",
 }
 
+# === ML Preprocessing ===
+# Features to log-transform (monetary and count variables with skewed distributions)
+LOG_TRANSFORM_FEATURES = [
+    "total_value", "tender_value", "award_value", "avg_value",
+    "avg_award_value", "total_savings", "median_value",
+    "total_awards", "total_tenders", "contracts_count", "buyer_count",
+]
+
+# Default ML features per analysis level
+DEFAULT_ML_FEATURES = {
+    "tender": [
+        "tender_value",
+        "price_change_pct",
+        "number_of_tenderers",
+        "is_single_bidder",
+        "is_competitive",
+        "is_weekend",
+        "is_q4",
+        "is_december",
+    ],
+    "buyer": [
+        "single_bidder_rate",
+        "competitive_rate",
+        "avg_discount_pct",
+        "supplier_diversity_index",
+    ],
+    "supplier": [
+        "total_awards",
+        "total_value",
+    ],
+}
+
+# Default contamination rate for anomaly detection
+DEFAULT_CONTAMINATION = 0.05
+
 # === Random State ===
 RANDOM_STATE = 42
