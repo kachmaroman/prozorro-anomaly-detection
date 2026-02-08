@@ -371,9 +371,16 @@ class AggregatedHDBSCAN:
         probabilities = model.probabilities_
         outlier_scores = 1 - probabilities
 
-        # Use percentile-based threshold (consistent with PyOD contamination)
-        threshold = np.percentile(outlier_scores, 100 * (1 - self.contamination))
-        anomaly_labels = (outlier_scores >= threshold).astype(int)
+        # Rank-based anomaly selection: always select exactly top contamination%.
+        # Simple percentile fails when noise_rate >> contamination (e.g. 53% noise
+        # all have score=1.0, so percentile threshold=1.0 flags all of them).
+        n_total = len(outlier_scores)
+        n_anomaly = max(1, int(n_total * self.contamination))
+
+        # Rank by score descending; ties broken by index (stable sort)
+        ranked_indices = np.argsort(-outlier_scores, kind='stable')
+        anomaly_labels = np.zeros(n_total, dtype=int)
+        anomaly_labels[ranked_indices[:n_anomaly]] = 1
 
         return labels, probabilities, outlier_scores, anomaly_labels
 

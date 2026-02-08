@@ -100,13 +100,15 @@ class EnsembleDetector:
             max_score = df["rule_score"].max()
             if max_score > 1:
                 df["rule_score"] = df["rule_score"] / max_score
-            # Anomaly = has at least 1 flag
-            if "rule_flags_count" in rule_results.columns:
-                df["rule_anomaly"] = (rule_results["rule_flags_count"].values > 0).astype(int)
-            elif "rule_risk_level" in rule_results.columns:
+            # Anomaly = high or critical risk level (score >= 6)
+            if "rule_risk_level" in rule_results.columns:
                 df["rule_anomaly"] = rule_results["rule_risk_level"].isin(["high", "critical"]).astype(int).values
+            elif "rule_risk_score" in rule_results.columns:
+                df["rule_anomaly"] = (rule_results["rule_risk_score"].values >= 6).astype(int)
+            elif "rule_flags_count" in rule_results.columns:
+                df["rule_anomaly"] = (rule_results["rule_flags_count"].values >= 3).astype(int)
             else:
-                df["rule_anomaly"] = (df["rule_score"] > 0.3).astype(int)
+                df["rule_anomaly"] = (df["rule_score"] > 0.5).astype(int)
             all_dfs.append(df)
             methods_used.append("rule")
             print(f"  Rule-based: {len(df):,} tenders, {df['rule_anomaly'].sum():,} flagged")
