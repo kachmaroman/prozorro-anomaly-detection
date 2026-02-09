@@ -110,6 +110,7 @@ LOG_TRANSFORM_FEATURES = [
     "total_value", "tender_value", "award_value", "avg_value",
     "avg_award_value", "total_savings", "median_value",
     "total_awards", "total_tenders", "contracts_count", "buyer_count",
+    "value_vs_cpv_median",
 ]
 
 # Default ML features per analysis level
@@ -123,6 +124,7 @@ DEFAULT_ML_FEATURES = {
         "is_weekend",
         "is_q4",
         "is_december",
+        "value_vs_cpv_median",
     ],
     "buyer": [
         "single_bidder_rate",

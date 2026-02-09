@@ -370,3 +370,153 @@ class EnsembleDetector:
             raise ValueError("Run combine() first")
 
         return self.method_stats
+
+    def generate_explanations(
+        self,
+        tenders_df: pd.DataFrame,
+        rule_results: Optional[pd.DataFrame] = None,
+        network_results: Optional[pd.DataFrame] = None,
+        buyer_portraits: Optional[pd.DataFrame] = None,
+    ) -> pd.Series:
+        """Generate human-readable explanations for flagged tenders.
+
+        Args:
+            tenders_df: Original tenders with tender_id, buyer_id, etc.
+            rule_results: Rule detector output with flag_* columns.
+            network_results: Network detector output with network_* columns.
+            buyer_portraits: Buyer-level portraits (from buyers.csv or aggregation).
+
+        Returns:
+            Series of explanation strings indexed like self.results.
+        """
+        if self.results is None:
+            raise ValueError("Run combine() first")
+
+        print("Generating explanations for flagged tenders...")
+        result = self.results
+        explanations = pd.Series("", index=result.index)
+
+        # Only generate for tenders with consensus >= 2
+        mask = result["consensus_count"] >= 2
+        if mask.sum() == 0:
+            return explanations
+
+        # --- Methods summary ---
+        method_names = {
+            "rule": "Правила",
+            "stat": "Статистика",
+            "if": "IForest",
+            "hdbscan": "HDBSCAN",
+            "network": "Мережа",
+        }
+        parts_methods = []
+        for method in self.methods_used:
+            anomaly_col = f"{method}_anomaly"
+            score_col = f"{method}_score"
+            if anomaly_col in result.columns:
+                name = method_names.get(method, method)
+                flagged = result[anomaly_col] == 1
+                score_str = result[score_col].apply(lambda s: f"{s:.2f}") if score_col in result.columns else ""
+                parts_methods.append((method, name, flagged, score_str))
+
+        def build_methods_line(idx):
+            active = []
+            for method, name, flagged_series, score_str in parts_methods:
+                if flagged_series.iloc[idx]:
+                    s = score_str.iloc[idx] if isinstance(score_str, pd.Series) else ""
+                    active.append(f"{name}({s})")
+            return active
+
+        # --- Rule flags (batch) ---
+        rule_flag_map = {}
+        if rule_results is not None:
+            flag_cols = [c for c in rule_results.columns if c.startswith("flag_")]
+            if flag_cols:
+                rule_indexed = rule_results.set_index("tender_id")
+                for col in flag_cols:
+                    rule_flag_map[col] = rule_indexed[col]
+
+        # --- Network flags (batch) ---
+        net_cols_map = {}
+        if network_results is not None:
+            for col in ["network_rotation", "network_monopolistic", "network_suspicious_supplier"]:
+                if col in network_results.columns:
+                    net_cols_map[col] = network_results.set_index("tender_id")[col]
+
+        # --- Buyer portraits (batch) ---
+        buyer_data = {}
+        if buyer_portraits is not None:
+            buyer_indexed = buyer_portraits.set_index("buyer_id")
+            portrait_cols = ["single_bidder_rate", "competitive_rate", "supplier_diversity_index",
+                             "avg_discount_pct", "total_tenders", "total_value"]
+            portrait_cols = [c for c in portrait_cols if c in buyer_indexed.columns]
+            buyer_data = {col: buyer_indexed[col] for col in portrait_cols}
+
+        # --- Tender buyer_id mapping ---
+        tender_buyer = {}
+        if buyer_data and tenders_df is not None and "buyer_id" in tenders_df.columns:
+            tender_buyer = tenders_df.set_index("tender_id")["buyer_id"]
+
+        # Vectorized explanation building
+        flagged_indices = result.index[mask]
+        flagged_tender_ids = result.loc[mask, "tender_id"]
+
+        print(f"  Building explanations for {len(flagged_indices):,} tenders...")
+
+        explanations_list = []
+        for idx, tid in zip(flagged_indices, flagged_tender_ids):
+            parts = []
+
+            # 1. Methods line
+            active = build_methods_line(idx)
+            consensus = int(result.at[idx, "consensus_count"])
+            parts.append(f"Консенсус: {consensus}/5 ({', '.join(active)})")
+
+            # 2. Rule flags
+            if rule_flag_map:
+                fired = []
+                for col, series in rule_flag_map.items():
+                    if tid in series.index and series[tid] == 1:
+                        fired.append(col.replace("flag_", ""))
+                if fired:
+                    parts.append(f"Правила: {', '.join(fired[:8])}" +
+                                 (f" (+{len(fired)-8})" if len(fired) > 8 else ""))
+
+            # 3. Network flags
+            if net_cols_map:
+                net_flags = []
+                net_labels = {
+                    "network_rotation": "ротація перемог",
+                    "network_monopolistic": "монополія",
+                    "network_suspicious_supplier": "підозріла зв'язність",
+                }
+                for col, series in net_cols_map.items():
+                    if tid in series.index and series[tid] == 1:
+                        net_flags.append(net_labels.get(col, col))
+                if net_flags:
+                    parts.append(f"Мережа: {', '.join(net_flags)}")
+
+            # 4. Buyer portrait
+            if buyer_data and tid in tender_buyer.index:
+                bid = tender_buyer[tid]
+                portrait_parts = []
+                if "single_bidder_rate" in buyer_data and bid in buyer_data["single_bidder_rate"].index:
+                    val = buyer_data["single_bidder_rate"][bid]
+                    if val > 0.5:
+                        portrait_parts.append(f"single_bidder={val:.0%}")
+                if "supplier_diversity_index" in buyer_data and bid in buyer_data["supplier_diversity_index"].index:
+                    val = buyer_data["supplier_diversity_index"][bid]
+                    if val < 0.3:
+                        portrait_parts.append(f"diversity={val:.2f}")
+                if "competitive_rate" in buyer_data and bid in buyer_data["competitive_rate"].index:
+                    val = buyer_data["competitive_rate"][bid]
+                    if val < 0.1:
+                        portrait_parts.append(f"competitive={val:.0%}")
+                if portrait_parts:
+                    parts.append(f"Портрет: {', '.join(portrait_parts)}")
+
+            explanations_list.append(" | ".join(parts))
+
+        explanations.loc[mask] = explanations_list
+        print(f"  Done. {len(explanations_list):,} explanations generated.")
+        return explanations

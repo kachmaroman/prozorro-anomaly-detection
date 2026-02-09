@@ -67,7 +67,7 @@ master-thesis/
 │   ├── data_loader.py   # Polars-based data loading (FAST!)
 │   └── detectors/
 │       ├── __init__.py
-│       ├── rule_based.py      # 44 red flag rules
+│       ├── rule_based.py      # 45 red flag rules
 │       ├── statistical.py     # Statistical screens
 │       ├── pyod_detector.py   # PyOD: IForest, ECOD + LOF (aggregated)
 │       ├── hdbscan.py         # HDBSCANDetector + AggregatedHDBSCAN
@@ -102,7 +102,7 @@ pair_agg = aggregate_by_pair(tenders)         # Buyer-supplier pairs
 
 ### Level 1: Rule-based (`RuleBasedDetector`)
 
-**44 правила** в 6 категоріях:
+**45 правил** в 6 категоріях:
 
 ```python
 from src.detectors import RuleBasedDetector
@@ -226,13 +226,26 @@ collusion_communities = detector.get_collusion_communities(min_size=5)
 
 ### Ensemble (`EnsembleDetector`)
 
-Combine multiple methods:
+Combine multiple methods with explanations:
 
 ```python
 from src.detectors import EnsembleDetector
 
-detector = EnsembleDetector(methods=["rule", "statistical", "iforest"])
-results = detector.fit_detect(tenders, bids_df=bids, buyers_df=buyers)
+detector = EnsembleDetector(
+    weights={"rule": 1.0, "stat": 0.8, "if": 1.0, "hdbscan": 0.8, "network": 1.0},
+    consensus_threshold=2,
+)
+results = detector.combine(
+    rule_results=rule_df, stat_results=stat_df,
+    if_results=if_df, hdbscan_results=hdbscan_df,
+    network_results=network_df,
+)
+
+# Generate human-readable explanations for flagged tenders
+explanations = detector.generate_explanations(
+    tenders_df=tenders, rule_results=rule_df,
+    network_results=network_df, buyer_portraits=buyers,
+)
 ```
 
 ## Preprocessing Pipeline
@@ -246,6 +259,7 @@ Raw Features → Log-transform (skewed) → Impute (median) → RobustScale → 
 **Log-transformed features** (monetary + counts):
 - `total_value`, `tender_value`, `award_value`, `avg_value`
 - `total_awards`, `total_tenders`, `contracts_count`, `buyer_count`
+- `value_vs_cpv_median` (ratio of tender value to CPV category median)
 
 ## Data Location
 
@@ -267,6 +281,7 @@ Dataset in `data/` folder (~5.3 GB):
 - `tender_value`, `award_value`, `price_change_pct`
 - `is_single_bidder`, `is_competitive`, `number_of_tenderers`
 - `is_weekend`, `is_q4`, `is_december`
+- `value_vs_cpv_median` (award_value / median for same CPV 2-digit category)
 
 ### Buyer-level (from `buyers.csv` or aggregation):
 - `single_bidder_rate`, `competitive_rate`
@@ -285,23 +300,34 @@ Dataset in `data/` folder (~5.3 GB):
 ### Code & Experiments
 - [x] Dataset parsed (13.1M tenders)
 - [x] Polars data loader (10-100x faster)
-- [x] **Level 1:** Rule-based detector (44 rules)
+- [x] **Level 1:** Rule-based detector (45 rules, incl. X011 high-value limited)
 - [x] **Level 2:** Statistical screens (Benford, Z-score, HHI)
 - [x] **Level 3:** PyOD detector (6 tender-level + 7 aggregated with LOF)
 - [x] **Level 3:** HDBSCAN (tender + aggregated levels)
 - [x] **Level 3:** ECOD (Empirical CDF - additional comparison method)
 - [x] **Level 4:** Network Analysis (configurable thresholds)
-- [x] **Ensemble:** Cross-method validation
+- [x] **Ensemble:** Cross-method validation with explanations
 - [x] Log-transform preprocessing
+- [x] `value_vs_cpv_median` feature for IForest (value contextual to CPV category)
+- [x] Human-readable explanation column for critical tenders
 
 ### Thesis Writing
 - [x] Вступ (intro_updated.md) — тема, мета, об'єкт, предмет
 - [x] Розділ 3 (chapter3_portfolio.md) — методика формування портретів
+- [x] Розділ 3.3 (section_3_3.md) — формування портретів (формальне визначення)
+- [x] Розділ 3.4 (section_3_4.md) — реалізація та результати методів
+- [x] Розділ 3.5 (section_3_5.md) — ансамблевий аналіз та крос-валідація
+- [x] Розділ 3.6 (section_3_6.md) — валідація результатів + висновки до розділу
 - [x] Розділ 4 (chapter4_experiments.md) — структура експериментів
 - [ ] Розділ 1 — теоретичні засади
 - [ ] Розділ 2 — огляд літератури
-- [ ] Заповнення результатів експериментів
 - [ ] Висновки
+
+### Output Files
+- `results/critical_tenders.csv` — Critical tenders with explanation column + buyer/supplier details
+- `results/ensemble_summary.csv` — Summary statistics
+- `results/network_*.csv` — Network analysis results (bid rotation, monopolistic, communities)
+- `results/synthetic_validation_*.csv` — Validation results
 
 ## Tech Stack
 
@@ -311,7 +337,6 @@ Dataset in `data/` folder (~5.3 GB):
 - **scikit-learn** - Preprocessing, metrics
 - **PyOD** - Anomaly detection algorithms
 - **HDBSCAN** - Clustering
-- **igraph** - Fast network analysis
 - **igraph** - Fast graph analysis (community detection, centrality)
 - **NetworkX** - Graph utilities and visualization
 - **Matplotlib/Seaborn** - Visualization
@@ -323,4 +348,4 @@ Dataset in `data/` folder (~5.3 GB):
   - Kaggle: https://www.kaggle.com/datasets/romankachmar/prozorro-ukraine-procurement-2022-2025
 
 ---
-Last updated: 2026-01-31
+Last updated: 2026-02-09

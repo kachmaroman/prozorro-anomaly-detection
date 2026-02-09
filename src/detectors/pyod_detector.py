@@ -200,6 +200,12 @@ class PyODDetector:
         df = tenders.copy()
         feature_cols = []
 
+        # Compute value_vs_cpv_median if requested
+        if "value_vs_cpv_median" in self.features.get("tender", []):
+            cpv_col = "main_cpv_2_digit" if "main_cpv_2_digit" in df.columns else "main_cpv_code"
+            cpv_median = df.groupby(cpv_col)["award_value"].transform("median")
+            df["value_vs_cpv_median"] = df["award_value"].fillna(0) / cpv_median.clip(lower=1)
+
         # Tender features
         for col in self.features.get("tender", []):
             if col in df.columns:

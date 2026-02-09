@@ -497,6 +497,15 @@ RULE_DEFINITIONS: Dict[str, RuleConfig] = {
         weight=2,
         requires_aggregation=True
     ),
+    "X011": RuleConfig(
+        id="X011",
+        name="high_value_limited",
+        name_ua="Великий прямий договір із замаскованим постачальником",
+        category="additional",
+        severity="critical",
+        description="Direct contract >10M UAH with masked supplier identity",
+        weight=3
+    ),
 }
 
 
@@ -1367,6 +1376,21 @@ class RuleBasedDetector:
 
         merged = df_copy.merge(suspicious, on=["buyer_id", "supplier_id", "pub_date"], how="left", indicator=True)
         return (merged["_merge"] == "both").astype(int)
+
+    def _check_high_value_limited(self, df: pd.DataFrame) -> pd.Series:
+        """X011: High-value direct contract with masked supplier.
+
+        Flags limited procurement >10M UAH where the supplier identity
+        is masked — a combination that prevents public accountability
+        for large sums of public money.
+        """
+        VALUE_THRESHOLD = 10_000_000  # 10M UAH
+
+        is_limited = df["procurement_method"] == "limited"
+        is_high_value = df["award_value"].fillna(0) >= VALUE_THRESHOLD
+        is_masked = df["supplier_id"].astype(str).isin(["88888888", "99999999", "00000000"])
+
+        return (is_limited & is_high_value & is_masked).astype(int)
 
     # =========================================================================
     # Utility Methods
