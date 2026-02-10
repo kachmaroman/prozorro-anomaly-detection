@@ -20,7 +20,7 @@
 Портрет = [feature_1, feature_2, ..., feature_N]
 ```
 
-**Приклад портрета замовника (buyer):**
+**Приклад портрета замовника (buyer, 12 features):**
 ```python
 portrait = {
     'single_bidder_rate': 0.45,      # Частка закупівель з 1 учасником
@@ -29,21 +29,25 @@ portrait = {
     'supplier_diversity_index': 0.7, # Диверсифікація постачальників
     'total_tenders': 150,            # Кількість закупівель
     'total_value': 5_000_000,        # Загальний обсяг (грн)
-    'avg_tender_value': 33_333,      # Середня вартість закупівлі
+    'avg_value': 33_333,             # Середня вартість закупівлі
+    'cpv_concentration': 0.35,       # HHI по CPV категоріях (0-1)
+    'avg_award_days': 45.2,          # Середній час до підписання (дні)
+    'weekend_rate': 0.08,            # Частка закупівель у вихідні
+    'value_variance_coeff': 1.5,     # Коефіцієнт варіації вартості
+    'q4_rate': 0.30,                 # Частка закупівель у Q4
 }
 ```
 
 **Три рівні портретів:**
 1. **Buyer-level** (~36K) — систематична поведінка замовника
 2. **Supplier-level** (~360K) — патерни перемог постачальника
-3. **Pair-level** (~500K) — взаємодія конкретної пари
+3. **Pair-level** (~916K) — взаємодія конкретної пари
 
 **Ключова перевага:** Перехід від аналізу окремих тендерів до аналізу поведінкових патернів суб'єктів дозволяє виявляти систематичні (не разові) відхилення.
 
 **Методи аналізу портретів:**
-- **Isolation Forest** — глобальні аномалії
-- **LOF** — локальні аномалії (нетиповий для свого контексту)
-- **HDBSCAN** — кластеризація + виявлення outliers
+- **Isolation Forest** — глобальні аномалії (PyOD)
+- **LOF** — локальні аномалії (PyOD)
 
 **Thesis documents:** `thesis/intro_updated.md`, `thesis/chapter3_portfolio.md`, `thesis/chapter4_experiments.md`
 
@@ -59,9 +63,9 @@ master-thesis/
 │   ├── 03_statistical_screens.ipynb   # Level 2: Statistical
 │   ├── 04_ensemble.ipynb              # Cross-method validation
 │   ├── 05_network_analysis.ipynb      # Network/Graph analysis
-│   ├── 06_pyod_comparison.ipynb       # Tender-level PyOD (fast algorithms)
-│   ├── 07_aggregated_hdbscan.ipynb    # Aggregated HDBSCAN clustering
-│   └── 08_aggregated_pyod.ipynb       # Aggregated-level PyOD (IForest, LOF, ECOD)
+│   ├── 06_aggregated_pyod.ipynb       # Aggregated-level IForest + LOF (buyer/supplier/pair)
+│   ├── 07_final_results.ipynb         # Cross-method consensus analysis
+│   └── 08_synthetic_validation.ipynb  # Synthetic anomaly injection validation
 ├── src/                 # Source code
 │   ├── config.py        # Thresholds, paths, constants
 │   ├── data_loader.py   # Polars-based data loading (FAST!)
@@ -69,8 +73,7 @@ master-thesis/
 │       ├── __init__.py
 │       ├── rule_based.py      # 45 red flag rules
 │       ├── statistical.py     # Statistical screens
-│       ├── pyod_detector.py   # PyOD: IForest, ECOD + LOF (aggregated)
-│       ├── hdbscan.py         # HDBSCANDetector + AggregatedHDBSCAN
+│       ├── pyod_detector.py   # PyOD: IForest (tender + aggregated) + LOF (aggregated only)
 │       ├── network.py         # Network/Graph analysis
 │       └── ensemble.py        # Ensemble detector
 ├── results/             # Experiment results and figures
@@ -123,74 +126,57 @@ detector = StatisticalDetector()
 results = detector.detect(tenders, bids_df=bids)
 ```
 
-### Level 3: ML - PyOD (RECOMMENDED)
+### Level 3: ML - Isolation Forest (PyOD)
 
-**Two levels of analysis:**
+**Two levels of analysis** — IForest is the only ML method that works at both tender-level and aggregated level:
 
-#### Tender-level (`PyODDetector`) - 2 algorithms:
-
-| Algorithm | Type | Speed | Description |
-|-----------|------|-------|-------------|
-| `iforest` | Tree-based | Fast | Isolation Forest (default) |
-| `ecod` | Distribution | Fast | Empirical CDF (parameter-free) |
+#### Tender-level (`PyODDetector`) — 12.9M tenders, 9 features incl. `value_vs_cpv_median`:
 
 ```python
-from src.detectors import PyODDetector, compare_algorithms
+from src.detectors import PyODDetector
 
-# Single algorithm
 detector = PyODDetector(algorithm="iforest", contamination=0.05)
-results = detector.fit_detect(tenders, buyers_df=buyers)
+results = detector.fit_detect(tenders)
 
-# Compare algorithms
-comparison = compare_algorithms(tenders, algorithms=["iforest", "ecod"])
+# Feature importance
+fi = detector.feature_importances()  # Returns sorted dict
 ```
 
-#### Aggregated-level (`AggregatedPyOD`) - 3 algorithms (+ LOF):
-
-LOF доступний тільки на агрегованому рівні, бо O(n²) — повільний на 13M тендерів, але швидкий на 36K buyers.
+#### Aggregated-level (`AggregatedPyOD`):
 
 ```python
 from src.detectors import AggregatedPyOD
 
-# LOF on aggregated data (recommended)
-detector = AggregatedPyOD(algorithm="lof", contamination=0.05)
+detector = AggregatedPyOD(algorithm="iforest", contamination=0.05)
 
-# Three levels of analysis
-buyer_results = detector.detect_buyers(tenders, buyers)
+# Three levels of analysis (fresh aggregation, no buyers_df needed)
+buyer_results = detector.detect_buyers(tenders)
 supplier_results = detector.detect_suppliers(tenders)
 pair_results = detector.detect_pairs(tenders, min_contracts=3)
 
 # Get anomalies
 suspicious = detector.get_anomalies("buyers", min_score=0.5)
+
+# Feature importance (IForest — computed from 100 trees)
+fi = detector.feature_importances("buyers")  # Returns sorted dict
 ```
 
-### Level 3: ML - HDBSCAN
+### Level 3: ML - LOF (Local Outlier Factor)
 
-**Two modes:**
+LOF detects contextual anomalies — entities that are abnormal relative to their neighbors. Complementary to IForest (Jaccard = 0.032 on buyer-level, 0.005 on supplier-level). **Aggregated-level only** — O(n²) complexity makes tender-level (12.9M records) impossible; works on ~36K buyers in ~8s (12 features).
 
-1. **Tender-level** - cluster individual tenders:
 ```python
-from src.detectors import HDBSCANDetector
+from src.detectors import AggregatedPyOD
 
-detector = HDBSCANDetector(min_cluster_size=50)
-results = detector.fit_detect(tenders, buyers_df=buyers)
-```
-
-2. **Aggregated-level** (RECOMMENDED) - cluster buyers/suppliers/pairs:
-```python
-from src.detectors import AggregatedHDBSCAN
-
-detector = AggregatedHDBSCAN(min_cluster_size=10)
+detector = AggregatedPyOD(algorithm="lof", contamination=0.05)
 
 # Three levels of analysis
-buyer_results = detector.cluster_buyers(tenders, buyers)
-supplier_results = detector.cluster_suppliers(tenders)
-pair_results = detector.cluster_pairs(tenders, min_contracts=3)
+buyer_results = detector.detect_buyers(tenders)
+supplier_results = detector.detect_suppliers(tenders)
+pair_results = detector.detect_pairs(tenders, min_contracts=3)
 
 # Get anomalies
-suspicious_buyers = detector.get_suspicious_buyers(min_score=0.5)
-suspicious_suppliers = detector.get_suspicious_suppliers(min_score=0.5)
-suspicious_pairs = detector.get_suspicious_pairs(min_score=0.5)
+suspicious = detector.get_anomalies("buyers", min_score=0.5)
 ```
 
 ### Level 4: Network Analysis (`NetworkAnalysisDetector`)
@@ -232,12 +218,12 @@ Combine multiple methods with explanations:
 from src.detectors import EnsembleDetector
 
 detector = EnsembleDetector(
-    weights={"rule": 1.0, "stat": 0.8, "if": 1.0, "hdbscan": 0.8, "network": 1.0},
+    weights={"rule": 1.0, "stat": 0.8, "if": 1.0, "lof": 0.8, "network": 1.0},
     consensus_threshold=2,
 )
 results = detector.combine(
     rule_results=rule_df, stat_results=stat_df,
-    if_results=if_df, hdbscan_results=hdbscan_df,
+    if_results=if_df, lof_results=lof_df,
     network_results=network_df,
 )
 
@@ -260,6 +246,7 @@ Raw Features → Log-transform (skewed) → Impute (median) → RobustScale → 
 - `total_value`, `tender_value`, `award_value`, `avg_value`
 - `total_awards`, `total_tenders`, `contracts_count`, `buyer_count`
 - `value_vs_cpv_median` (ratio of tender value to CPV category median)
+- `avg_award_days`, `cpv_diversity`
 
 ## Data Location
 
@@ -283,33 +270,38 @@ Dataset in `data/` folder (~5.3 GB):
 - `is_weekend`, `is_q4`, `is_december`
 - `value_vs_cpv_median` (award_value / median for same CPV 2-digit category)
 
-### Buyer-level (from `buyers.csv` or aggregation):
-- `single_bidder_rate`, `competitive_rate`
-- `supplier_diversity_index`
-- `avg_discount_pct`, `total_value`
+### Buyer-level (12 features from aggregation):
+- `single_bidder_rate`, `competitive_rate`, `avg_discount_pct`
+- `supplier_diversity_index`, `total_tenders`, `total_value`, `avg_value`
+- `cpv_concentration` (HHI of CPV categories), `avg_award_days`, `weekend_rate`
+- `value_variance_coeff` (CV of tender values), `q4_rate`
 
-### Supplier-level:
-- `total_awards`, `total_value`
-- `buyer_count`, `single_bidder_rate`
+### Supplier-level (7 features):
+- `total_awards`, `total_value`, `avg_award_value`
+- `buyer_count`, `single_bidder_rate`, `avg_competitors`
+- `cpv_diversity` (number of unique CPV categories)
 
-### Pair-level (buyer-supplier):
-- `contracts_count`, `exclusivity_buyer`, `exclusivity_supplier`
+### Pair-level (7 features):
+- `contracts_count`, `total_value`, `avg_value`
+- `single_bidder_rate`, `exclusivity_buyer`, `exclusivity_supplier`
+- `temporal_concentration` (std of days between contracts)
 
 ## Current Status
 
 ### Code & Experiments
-- [x] Dataset parsed (13.1M tenders)
+- [x] Dataset parsed (12.9M tenders)
 - [x] Polars data loader (10-100x faster)
 - [x] **Level 1:** Rule-based detector (45 rules, incl. X011 high-value limited)
 - [x] **Level 2:** Statistical screens (Benford, Z-score, HHI)
-- [x] **Level 3:** PyOD detector (6 tender-level + 7 aggregated with LOF)
-- [x] **Level 3:** HDBSCAN (tender + aggregated levels)
-- [x] **Level 3:** ECOD (Empirical CDF - additional comparison method)
+- [x] **Level 3:** Isolation Forest via PyOD (tender-level + aggregated)
+- [x] **Level 3:** LOF via PyOD (aggregated, core ensemble method)
 - [x] **Level 4:** Network Analysis (configurable thresholds)
 - [x] **Ensemble:** Cross-method validation with explanations
 - [x] Log-transform preprocessing
 - [x] `value_vs_cpv_median` feature for IForest (value contextual to CPV category)
 - [x] Human-readable explanation column for critical tenders
+- [x] Extended portraits: buyer (12 features), supplier (7), pair (7)
+- [x] Feature importance for IForest (computed from individual trees)
 
 ### Thesis Writing
 - [x] Вступ (intro_updated.md) — тема, мета, об'єкт, предмет
@@ -318,9 +310,9 @@ Dataset in `data/` folder (~5.3 GB):
 - [x] Розділ 3.4 (section_3_4.md) — реалізація та результати методів
 - [x] Розділ 3.5 (section_3_5.md) — ансамблевий аналіз та крос-валідація
 - [x] Розділ 3.6 (section_3_6.md) — валідація результатів + висновки до розділу
-- [x] Розділ 4 (chapter4_experiments.md) — структура експериментів
+- [x] Розділ 2 (chapter4_experiments.md) — емпіричне дослідження
 - [ ] Розділ 1 — теоретичні засади
-- [ ] Розділ 2 — огляд літератури
+- [ ] Огляд літератури
 - [ ] Висновки
 
 ### Output Files
@@ -335,8 +327,7 @@ Dataset in `data/` folder (~5.3 GB):
 - **Polars** - Fast data loading and aggregation
 - **Pandas/NumPy** - ML compatibility
 - **scikit-learn** - Preprocessing, metrics
-- **PyOD** - Anomaly detection algorithms
-- **HDBSCAN** - Clustering
+- **PyOD** - Anomaly detection (IForest + LOF)
 - **igraph** - Fast graph analysis (community detection, centrality)
 - **NetworkX** - Graph utilities and visualization
 - **Matplotlib/Seaborn** - Visualization
@@ -348,4 +339,4 @@ Dataset in `data/` folder (~5.3 GB):
   - Kaggle: https://www.kaggle.com/datasets/romankachmar/prozorro-ukraine-procurement-2022-2025
 
 ---
-Last updated: 2026-02-09
+Last updated: 2026-02-10

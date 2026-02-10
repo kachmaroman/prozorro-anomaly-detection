@@ -44,16 +44,8 @@ class Thresholds:
     SKEWNESS_SUSPICIOUS = 0.5             # abs value
     KURTOSIS_SUSPICIOUS = 2.0             # excess kurtosis
 
-    # Isolation Forest
+    # Isolation Forest / LOF
     IF_CONTAMINATION = 0.05               # 5% anomalies expected
-
-    # LOF
-    LOF_N_NEIGHBORS = 20
-    LOF_CONTAMINATION = 0.05
-
-    # DBSCAN
-    DBSCAN_EPS = 0.5
-    DBSCAN_MIN_SAMPLES = 5
 
 # === Risk Levels ===
 class RiskLevel:
@@ -111,6 +103,8 @@ LOG_TRANSFORM_FEATURES = [
     "avg_award_value", "total_savings", "median_value",
     "total_awards", "total_tenders", "contracts_count", "buyer_count",
     "value_vs_cpv_median",
+    "avg_award_days",
+    "cpv_diversity",
 ]
 
 # Default ML features per analysis level
@@ -131,10 +125,16 @@ DEFAULT_ML_FEATURES = {
         "competitive_rate",
         "avg_discount_pct",
         "supplier_diversity_index",
+        "cpv_concentration",
+        "avg_award_days",
+        "weekend_rate",
+        "value_variance_coeff",
+        "q4_rate",
     ],
     "supplier": [
         "total_awards",
         "total_value",
+        "cpv_diversity",
     ],
 }
 

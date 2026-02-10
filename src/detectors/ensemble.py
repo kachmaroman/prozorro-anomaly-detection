@@ -5,7 +5,7 @@ This module combines multiple detection methods:
 1. Rule-based (red flags)
 2. Statistical screens
 3. Isolation Forest
-4. HDBSCAN
+4. LOF (Local Outlier Factor)
 5. Network Analysis
 
 Cross-method agreement provides stronger anomaly signals.
@@ -33,7 +33,7 @@ class EnsembleDetector:
             rule_results=rule_df,
             stat_results=stat_df,
             if_results=if_df,
-            hdbscan_results=hdbscan_df,
+            lof_results=lof_df,
             network_results=network_df,
         )
         print(detector.summary())
@@ -55,7 +55,7 @@ class EnsembleDetector:
             "rule": 1.0,
             "stat": 0.8,
             "if": 1.0,
-            "hdbscan": 0.8,
+            "lof": 0.8,
             "network": 1.0,
         }
         self.consensus_threshold = consensus_threshold
@@ -69,7 +69,7 @@ class EnsembleDetector:
         rule_results: Optional[pd.DataFrame] = None,
         stat_results: Optional[pd.DataFrame] = None,
         if_results: Optional[pd.DataFrame] = None,
-        hdbscan_results: Optional[pd.DataFrame] = None,
+        lof_results: Optional[pd.DataFrame] = None,
         network_results: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """
@@ -79,7 +79,7 @@ class EnsembleDetector:
         - RuleBasedDetector: rule_risk_score, rule_flags_count, rule_risk_level
         - StatisticalDetector: stat_score, stat_anomaly, stat_flags_count
         - PyODDetector (IForest): score, anomaly
-        - HDBSCANDetector: hdbscan_score, hdbscan_anomaly
+        - AggregatedPyOD (LOF): score, anomaly
         - NetworkAnalysisDetector: network_score, network_anomaly
 
         Returns:
@@ -155,25 +155,25 @@ class EnsembleDetector:
             methods_used.append("if")
             print(f"  Isolation Forest: {len(df):,} tenders, {df['if_anomaly'].sum():,} flagged")
 
-        # --- HDBSCAN ---
-        if hdbscan_results is not None and "tender_id" in hdbscan_results.columns:
-            df = hdbscan_results[["tender_id"]].copy()
-            # HDBSCANDetector returns 'hdbscan_score' and 'hdbscan_anomaly'
-            if "hdbscan_score" in hdbscan_results.columns:
-                df["hdbscan_score"] = hdbscan_results["hdbscan_score"].values
-            elif "score" in hdbscan_results.columns:
-                df["hdbscan_score"] = hdbscan_results["score"].values
+        # --- LOF ---
+        if lof_results is not None and "tender_id" in lof_results.columns:
+            df = lof_results[["tender_id"]].copy()
+            # AggregatedPyOD (LOF) returns 'lof_score' and 'lof_anomaly'
+            if "lof_score" in lof_results.columns:
+                df["lof_score"] = lof_results["lof_score"].values
+            elif "score" in lof_results.columns:
+                df["lof_score"] = lof_results["score"].values
             else:
-                df["hdbscan_score"] = 0
-            if "hdbscan_anomaly" in hdbscan_results.columns:
-                df["hdbscan_anomaly"] = hdbscan_results["hdbscan_anomaly"].values
-            elif "anomaly" in hdbscan_results.columns:
-                df["hdbscan_anomaly"] = hdbscan_results["anomaly"].values
+                df["lof_score"] = 0
+            if "lof_anomaly" in lof_results.columns:
+                df["lof_anomaly"] = lof_results["lof_anomaly"].values
+            elif "anomaly" in lof_results.columns:
+                df["lof_anomaly"] = lof_results["anomaly"].values
             else:
-                df["hdbscan_anomaly"] = 0
+                df["lof_anomaly"] = 0
             all_dfs.append(df)
-            methods_used.append("hdbscan")
-            print(f"  HDBSCAN: {len(df):,} tenders, {df['hdbscan_anomaly'].sum():,} flagged")
+            methods_used.append("lof")
+            print(f"  LOF: {len(df):,} tenders, {df['lof_anomaly'].sum():,} flagged")
 
         # --- Network ---
         if network_results is not None and "tender_id" in network_results.columns:
@@ -406,7 +406,7 @@ class EnsembleDetector:
             "rule": "Правила",
             "stat": "Статистика",
             "if": "IForest",
-            "hdbscan": "HDBSCAN",
+            "lof": "LOF",
             "network": "Мережа",
         }
         parts_methods = []

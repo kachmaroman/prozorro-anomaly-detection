@@ -452,14 +452,34 @@ def aggregate_by_buyer(
     Aggregate tender data by buyer for clustering/analysis.
 
     Returns buyer-level features:
-    - total_tenders, total_value, avg_value
+    - total_tenders, total_value, avg_value, median_value
     - single_bidder_rate, competitive_rate
-    - unique_suppliers, supplier_diversity
+    - unique_suppliers, supplier_diversity_index
+    - cpv_concentration (HHI), avg_award_days, weekend_rate
+    - value_variance_coeff, q4_rate
     """
     if isinstance(tenders, pd.DataFrame):
         tenders_pl = pl.from_pandas(tenders)
     else:
         tenders_pl = tenders
+
+    # Compute CPV concentration (HHI) per buyer — requires sub-aggregation
+    cpv_counts = (
+        tenders_pl.filter(pl.col("main_cpv_2_digit").is_not_null())
+        .group_by(["buyer_id", "main_cpv_2_digit"])
+        .agg(pl.count().alias("cpv_count"))
+    )
+    buyer_cpv_total = cpv_counts.group_by("buyer_id").agg(
+        pl.col("cpv_count").sum().alias("cpv_total")
+    )
+    cpv_counts = cpv_counts.join(buyer_cpv_total, on="buyer_id")
+    cpv_hhi = (
+        cpv_counts.with_columns(
+            (pl.col("cpv_count") / pl.col("cpv_total")).pow(2).alias("share_sq")
+        )
+        .group_by("buyer_id")
+        .agg(pl.col("share_sq").sum().alias("cpv_concentration"))
+    )
 
     result = tenders_pl.group_by("buyer_id").agg([
         pl.count().alias("total_tenders"),
@@ -471,12 +491,20 @@ def aggregate_by_buyer(
         pl.col("price_change_pct").mean().alias("avg_discount_pct"),
         pl.col("supplier_id").n_unique().alias("unique_suppliers"),
         pl.col("number_of_tenderers").mean().alias("avg_tenderers"),
+        ((pl.col("award_date") - pl.col("published_date")).dt.total_days().mean()).alias("avg_award_days"),
+        pl.col("is_weekend").mean().alias("weekend_rate"),
+        pl.col("tender_value").std().alias("_tv_std"),
+        pl.col("is_q4").mean().alias("q4_rate"),
     ])
 
-    # Calculate supplier diversity index (unique suppliers / total tenders)
-    result = result.with_columns(
-        (pl.col("unique_suppliers") / pl.col("total_tenders")).alias("supplier_diversity_index")
-    )
+    # Calculate derived features
+    result = result.with_columns([
+        (pl.col("unique_suppliers") / pl.col("total_tenders")).alias("supplier_diversity_index"),
+        (pl.col("_tv_std") / pl.col("avg_value").clip(lower_bound=1)).alias("value_variance_coeff"),
+    ]).drop("_tv_std")
+
+    # Join CPV concentration
+    result = result.join(cpv_hhi, on="buyer_id", how="left")
 
     if return_polars:
         return result
@@ -491,9 +519,9 @@ def aggregate_by_supplier(
     Aggregate tender data by supplier for clustering/analysis.
 
     Returns supplier-level features:
-    - total_awards, total_value, avg_value
-    - unique_buyers, buyer_concentration
-    - single_bidder_rate, avg_competitors
+    - total_awards, total_value, avg_award_value
+    - buyer_count, single_bidder_rate, avg_competitors
+    - cpv_diversity
     """
     if isinstance(tenders, pd.DataFrame):
         tenders_pl = pl.from_pandas(tenders)
@@ -507,6 +535,7 @@ def aggregate_by_supplier(
         pl.col("buyer_id").n_unique().alias("buyer_count"),
         pl.col("is_single_bidder").mean().alias("single_bidder_rate"),
         pl.col("number_of_tenderers").mean().alias("avg_competitors"),
+        pl.col("main_cpv_2_digit").n_unique().alias("cpv_diversity"),
     ])
 
     if return_polars:
@@ -525,7 +554,8 @@ def aggregate_by_pair(
     Returns pair-level features:
     - contracts_count, total_value, avg_value
     - single_bidder_rate
-    - exclusivity metrics
+    - exclusivity_buyer, exclusivity_supplier
+    - temporal_concentration
     """
     if isinstance(tenders, pd.DataFrame):
         tenders_pl = pl.from_pandas(tenders)
@@ -558,6 +588,14 @@ def aggregate_by_pair(
         (pl.col("contracts_count") / pl.col("buyer_total")).alias("exclusivity_buyer"),
         (pl.col("contracts_count") / pl.col("supplier_total")).alias("exclusivity_supplier"),
     ]).drop(["buyer_total", "supplier_total"])
+
+    # Temporal concentration: std of days between contracts per pair
+    pair_temporal = (
+        tenders_pl.sort("award_date")
+        .group_by(["buyer_id", "supplier_id"])
+        .agg(pl.col("award_date").diff().dt.total_days().std().alias("temporal_concentration"))
+    )
+    pair_agg = pair_agg.join(pair_temporal, on=["buyer_id", "supplier_id"], how="left")
 
     if return_polars:
         return pair_agg

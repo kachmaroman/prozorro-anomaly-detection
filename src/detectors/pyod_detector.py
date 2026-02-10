@@ -1,19 +1,14 @@
 """
 PyOD-based Anomaly Detection for Public Procurement.
 
-Unified interface for multiple anomaly detection algorithms using PyOD library.
+Two core algorithms (both used in ensemble):
+- Isolation Forest — global anomaly detection (isolates outliers)
+- LOF — local anomaly detection (contextual outliers)
 
-Main methods (based on experimental comparison):
-- Tender-level (PyODDetector): IForest, ECOD
-- Aggregated-level (AggregatedPyOD): + LOF (O(n²) - only for aggregated data)
+Legacy: ECOD (notebook 06 only).
 
-Removed after comparison (high overlap or slow):
-- AutoEncoder: 73% overlap with IForest, slower
-- COPOD: 87% overlap with ECOD
-- HBOS: assumes feature independence, less accurate
-- OCSVM: 84% overlap with KNN, slow
-- VAE: similar to AutoEncoder, slower
-- KNN: replaced by LOF for local anomalies
+- Tender-level (PyODDetector): IForest (default)
+- Aggregated-level (AggregatedPyOD): IForest + LOF (both core ensemble methods)
 
 Author: Roman Kachmar
 """
@@ -189,6 +184,27 @@ class PyODDetector:
         print(f"  Anomalies: {n_anomalies:,} ({n_anomalies/len(result)*100:.2f}%)")
 
         return result
+
+    def feature_importances(self) -> Optional[Dict[str, float]]:
+        """
+        Get feature importances for IForest model.
+
+        Computed as mean of individual tree feature importances.
+        Only available for algorithm='iforest'. Returns None for ECOD.
+
+        Returns:
+            Dict of {feature_name: importance} sorted by importance descending,
+            or None if not available.
+        """
+        if self.algorithm != "iforest" or self.model is None:
+            return None
+
+        # IsolationForest doesn't expose feature_importances_ directly,
+        # but individual trees (ExtraTreeRegressor) do
+        trees = self.model.detector_.estimators_
+        importances = np.mean([t.feature_importances_ for t in trees], axis=0)
+        result = dict(zip(self.feature_names_, importances))
+        return dict(sorted(result.items(), key=lambda x: x[1], reverse=True))
 
     def _prepare_features(
         self,
@@ -385,6 +401,12 @@ class AggregatedPyOD:
         self.buyer_results_ = None
         self.supplier_results_ = None
         self.pair_results_ = None
+        self.buyer_model_ = None
+        self.supplier_model_ = None
+        self.pair_model_ = None
+        self.buyer_features_ = None
+        self.supplier_features_ = None
+        self.pair_features_ = None
 
     def _create_model(self):
         """Create PyOD model instance."""
@@ -415,7 +437,7 @@ class AggregatedPyOD:
         return X_scaled
 
     def _fit_and_score(self, X: np.ndarray) -> tuple:
-        """Fit model and return normalized scores and labels."""
+        """Fit model and return normalized scores, labels, and fitted model."""
         model = self._create_model()
         model.fit(X)
 
@@ -425,7 +447,7 @@ class AggregatedPyOD:
         # Normalize to 0-1
         scores_norm = (scores - scores.min()) / (scores.max() - scores.min() + 1e-10)
 
-        return scores_norm, labels
+        return scores_norm, labels, model
 
     def detect_buyers(
         self,
@@ -459,7 +481,9 @@ class AggregatedPyOD:
         # Select features
         feature_cols = []
         for col in ["single_bidder_rate", "competitive_rate", "avg_discount_pct",
-                    "supplier_diversity_index", "total_tenders", "avg_value", "total_value"]:
+                    "supplier_diversity_index", "total_tenders", "avg_value", "total_value",
+                    "cpv_concentration", "avg_award_days", "weekend_rate",
+                    "value_variance_coeff", "q4_rate"]:
             if col in buyer_agg.columns:
                 feature_cols.append(col)
 
@@ -468,7 +492,9 @@ class AggregatedPyOD:
 
         # Fit and detect
         X = self._preprocess(buyer_agg, feature_cols)
-        scores, labels = self._fit_and_score(X)
+        scores, labels, model = self._fit_and_score(X)
+        self.buyer_model_ = model
+        self.buyer_features_ = feature_cols
 
         # Build results
         result = buyer_agg[["buyer_id"]].copy()
@@ -515,7 +541,8 @@ class AggregatedPyOD:
         # Select features
         feature_cols = []
         for col in ["total_awards", "total_value", "avg_award_value",
-                    "buyer_count", "single_bidder_rate", "avg_competitors"]:
+                    "buyer_count", "single_bidder_rate", "avg_competitors",
+                    "cpv_diversity"]:
             if col in supplier_agg.columns:
                 feature_cols.append(col)
 
@@ -524,7 +551,9 @@ class AggregatedPyOD:
 
         # Fit and detect
         X = self._preprocess(supplier_agg, feature_cols)
-        scores, labels = self._fit_and_score(X)
+        scores, labels, model = self._fit_and_score(X)
+        self.supplier_model_ = model
+        self.supplier_features_ = feature_cols
 
         # Build results
         result = supplier_agg[["supplier_id"]].copy()
@@ -574,16 +603,20 @@ class AggregatedPyOD:
             return pd.DataFrame()
 
         # Select features
-        feature_cols = [
-            "contracts_count", "total_value", "avg_value",
-            "single_bidder_rate", "exclusivity_buyer", "exclusivity_supplier"
-        ]
+        feature_cols = []
+        for col in ["contracts_count", "total_value", "avg_value",
+                    "single_bidder_rate", "exclusivity_buyer", "exclusivity_supplier",
+                    "temporal_concentration"]:
+            if col in pair_agg.columns:
+                feature_cols.append(col)
 
         print(f"  Features: {feature_cols}")
 
         # Fit and detect
         X = self._preprocess(pair_agg, feature_cols)
-        scores, labels = self._fit_and_score(X)
+        scores, labels, model = self._fit_and_score(X)
+        self.pair_model_ = model
+        self.pair_features_ = feature_cols
 
         # Build results
         result = pair_agg[["buyer_id", "supplier_id"]].copy()
@@ -642,3 +675,39 @@ class AggregatedPyOD:
                 ])
 
         return summaries
+
+    def feature_importances(
+        self,
+        level: str = "buyers",
+    ) -> Optional[Dict[str, float]]:
+        """
+        Get feature importances for IForest models.
+
+        Only available for algorithm='iforest'. Returns None for LOF/ECOD.
+
+        Args:
+            level: Which level's model to use ('buyers', 'suppliers', 'pairs')
+
+        Returns:
+            Dict of {feature_name: importance} sorted by importance descending,
+            or None if not available.
+        """
+        if self.algorithm != "iforest":
+            return None
+
+        model_map = {
+            "buyers": (self.buyer_model_, self.buyer_features_),
+            "suppliers": (self.supplier_model_, self.supplier_features_),
+            "pairs": (self.pair_model_, self.pair_features_),
+        }
+
+        model, features = model_map.get(level, (None, None))
+        if model is None or features is None:
+            return None
+
+        # IsolationForest doesn't expose feature_importances_ directly,
+        # but individual trees (ExtraTreeRegressor) do
+        trees = model.detector_.estimators_
+        importances = np.mean([t.feature_importances_ for t in trees], axis=0)
+        result = dict(zip(features, importances))
+        return dict(sorted(result.items(), key=lambda x: x[1], reverse=True))
