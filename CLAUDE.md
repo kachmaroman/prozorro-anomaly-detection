@@ -303,17 +303,18 @@ Dataset in `data/` folder (~5.3 GB):
 - [x] Extended portraits: buyer (12 features), supplier (7), pair (7)
 - [x] Feature importance for IForest (computed from individual trees)
 
-### Thesis Writing
-- [x] Вступ (intro_updated.md) — тема, мета, об'єкт, предмет
-- [x] Розділ 3 (chapter3_portfolio.md) — методика формування портретів
-- [x] Розділ 3.3 (section_3_3.md) — формування портретів (формальне визначення)
-- [x] Розділ 3.4 (section_3_4.md) — реалізація та результати методів
-- [x] Розділ 3.5 (section_3_5.md) — ансамблевий аналіз та крос-валідація
-- [x] Розділ 3.6 (section_3_6.md) — валідація результатів + висновки до розділу
-- [x] Розділ 2 (chapter4_experiments.md) — емпіричне дослідження
-- [ ] Розділ 1 — теоретичні засади
-- [ ] Огляд літератури
-- [ ] Висновки
+### Thesis Writing (структура: Вступ + 2 розділи + Висновки)
+- [x] Розділ 1 / Вступ (intro_updated.md) — актуальність, мета, об'єкт, предмет, методи
+- [x] Розділ 2 / Теоретико-методологічні засади (thesis_draft.pdf, стор. 8-22) — огляд літератури, підходи, концепція портретів
+- [x] Розділ 3 / Експериментальне дослідження:
+  - [x] 3.1 (chapter3_portfolio.md) — методологія оцінки результатів
+  - [x] 3.2 — збір та обробка даних
+  - [x] 3.3 (section_3_3.md) — формування портретів (формальне визначення)
+  - [x] 3.4 (section_3_4.md) — реалізація та результати методів
+  - [x] 3.5 (section_3_5.md) — ансамблевий аналіз та крос-валідація
+  - [x] 3.6 (section_3_6.md) — валідація результатів + висновки до розділу
+- [x] Розділ 2 емпіричні числа (chapter4_experiments.md)
+- [ ] Висновки (загальні)
 
 ### Output Files
 - `results/critical_tenders.csv` — Critical tenders with explanation column + buyer/supplier details

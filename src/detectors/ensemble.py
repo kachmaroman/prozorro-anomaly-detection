@@ -165,6 +165,11 @@ class EnsembleDetector:
                 df["lof_score"] = lof_results["score"].values
             else:
                 df["lof_score"] = 0
+            # Rank-based normalization: PyOD LOF scores are compressed near zero
+            # (median anomalous ~0.0008, normal ~0.0002), making them useless
+            # for weighted averaging and display. Percentile rank preserves
+            # ordering while mapping to interpretable 0-1 range.
+            df["lof_score"] = df["lof_score"].rank(pct=True)
             if "lof_anomaly" in lof_results.columns:
                 df["lof_anomaly"] = lof_results["lof_anomaly"].values
             elif "anomaly" in lof_results.columns:
