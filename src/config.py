@@ -49,9 +49,9 @@ class Thresholds:
 
 # === Risk Levels ===
 class RiskLevel:
-    CRITICAL = "critical"    # 4/4 methods agree
-    HIGH = "high"            # 3/4 methods agree
-    MEDIUM = "medium"        # 2/4 methods agree
+    CRITICAL = "critical"    # 5/5 methods agree
+    HIGH = "high"            # 4/5 methods agree
+    MEDIUM = "medium"        # 2-3/5 methods agree
     LOW = "low"              # 1 method
 
 # === Feature Groups ===
@@ -125,6 +125,9 @@ DEFAULT_ML_FEATURES = {
         "competitive_rate",
         "avg_discount_pct",
         "supplier_diversity_index",
+        "total_tenders",
+        "avg_value",
+        "total_value",
         "cpv_concentration",
         "avg_award_days",
         "weekend_rate",
@@ -134,7 +137,20 @@ DEFAULT_ML_FEATURES = {
     "supplier": [
         "total_awards",
         "total_value",
+        "avg_award_value",
+        "buyer_count",
+        "single_bidder_rate",
+        "avg_competitors",
         "cpv_diversity",
+    ],
+    "pair": [
+        "contracts_count",
+        "total_value",
+        "avg_value",
+        "single_bidder_rate",
+        "exclusivity_buyer",
+        "exclusivity_supplier",
+        "temporal_concentration",
     ],
 }
 
