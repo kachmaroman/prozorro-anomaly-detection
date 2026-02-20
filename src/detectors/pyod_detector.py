@@ -21,10 +21,9 @@ from typing import Optional, List, Dict, Literal
 
 from src.config import LOG_TRANSFORM_FEATURES, DEFAULT_ML_FEATURES, DEFAULT_CONTAMINATION
 
-# PyOD imports (main methods only)
+# PyOD imports (core methods only)
 from pyod.models.iforest import IForest
 from pyod.models.lof import LOF
-from pyod.models.ecod import ECOD
 
 
 # Algorithm configurations for TENDER-LEVEL (fast algorithms only)
@@ -34,11 +33,6 @@ ALGORITHMS = {
         "class": IForest,
         "params": {"n_estimators": 100, "behaviour": "new", "n_jobs": -1},
         "description": "Isolation Forest - isolates anomalies using random trees",
-    },
-    "ecod": {
-        "class": ECOD,
-        "params": {"n_jobs": -1},
-        "description": "Empirical Cumulative Distribution - unsupervised, parameter-free",
     },
 }
 
@@ -50,9 +44,7 @@ class PyODDetector:
     """
     Unified anomaly detector using PyOD library for TENDER-LEVEL analysis.
 
-    Fast algorithms for 13M+ tenders:
-    - iforest: Isolation Forest (recommended)
-    - ecod: Empirical Cumulative Distribution (parameter-free)
+    Uses Isolation Forest for 13M+ tenders.
 
     Note: LOF is O(n²) - only available at aggregated level
     via AggregatedPyOD (36K buyers instead of 13M tenders).
@@ -65,7 +57,7 @@ class PyODDetector:
 
     def __init__(
         self,
-        algorithm: Literal["iforest", "ecod"] = "iforest",
+        algorithm: Literal["iforest"] = "iforest",
         contamination: float = 0.05,
         features: Optional[Dict[str, List[str]]] = None,
         random_state: int = 42,
@@ -75,7 +67,7 @@ class PyODDetector:
         Initialize PyOD-based detector.
 
         Args:
-            algorithm: Algorithm to use (iforest, ecod)
+            algorithm: Algorithm to use (iforest)
             contamination: Expected proportion of anomalies (0.01-0.5)
             features: Dict with "tender", "buyer", "supplier" feature lists
             random_state: Random seed for reproducibility
@@ -162,8 +154,12 @@ class PyODDetector:
         scores = self.model.decision_scores_
         labels = self.model.labels_
 
-        # Normalize scores to 0-1
-        scores_norm = (scores - scores.min()) / (scores.max() - scores.min() + 1e-10)
+        # Normalize to 0-1 with percentile clipping to prevent
+        # extreme outliers from compressing all other scores to ~0
+        lo = np.percentile(scores, 1)
+        hi = np.percentile(scores, 99)
+        scores_clipped = np.clip(scores, lo, hi)
+        scores_norm = (scores_clipped - lo) / (hi - lo + 1e-10)
 
         # Build results
         result = tenders_work[["tender_id"]].copy()
@@ -190,11 +186,11 @@ class PyODDetector:
         Get feature importances for IForest model.
 
         Computed as mean of individual tree feature importances.
-        Only available for algorithm='iforest'. Returns None for ECOD.
+        Computed as mean of individual tree feature importances.
 
         Returns:
             Dict of {feature_name: importance} sorted by importance descending,
-            or None if not available.
+            or None if model not fitted.
         """
         if self.algorithm != "iforest" or self.model is None:
             return None
@@ -295,50 +291,6 @@ class PyODDetector:
         return self.results[self.results["score"] >= min_score]
 
 
-def compare_algorithms(
-    tenders: pd.DataFrame,
-    algorithms: List[str] = ["iforest", "ecod"],
-    contamination: float = 0.05,
-    sample_size: Optional[int] = None,
-    buyers_df: Optional[pd.DataFrame] = None,
-    suppliers_df: Optional[pd.DataFrame] = None,
-) -> pd.DataFrame:
-    """
-    Compare multiple anomaly detection algorithms.
-
-    Args:
-        tenders: Tenders DataFrame
-        algorithms: List of algorithm names to compare
-        contamination: Expected anomaly rate
-        sample_size: Sample size (for large datasets)
-        buyers_df: Optional buyers DataFrame
-        suppliers_df: Optional suppliers DataFrame
-
-    Returns:
-        DataFrame with comparison results
-    """
-    results = []
-
-    for algo in algorithms:
-        print(f"\n{'='*60}")
-        detector = PyODDetector(algorithm=algo, contamination=contamination)
-        result = detector.fit_detect(
-            tenders,
-            buyers_df=buyers_df,
-            suppliers_df=suppliers_df,
-            sample_size=sample_size
-        )
-
-        results.append({
-            "algorithm": algo,
-            "anomalies": result["anomaly"].sum(),
-            "anomaly_rate": result["anomaly"].mean() * 100,
-            "mean_score": result["score"].mean(),
-            "max_score": result["score"].max(),
-        })
-
-    return pd.DataFrame(results)
-
 
 # Algorithms available for AGGREGATED level (includes O(n²) algorithms)
 # All tender-level algorithms + LOF (too slow for 13M tenders)
@@ -376,7 +328,7 @@ class AggregatedPyOD:
 
     def __init__(
         self,
-        algorithm: Literal["iforest", "lof", "ecod"] = "lof",
+        algorithm: Literal["iforest", "lof"] = "lof",
         contamination: float = 0.05,
         random_state: int = 42,
         **kwargs,
@@ -444,8 +396,12 @@ class AggregatedPyOD:
         scores = model.decision_scores_
         labels = model.labels_
 
-        # Normalize to 0-1
-        scores_norm = (scores - scores.min()) / (scores.max() - scores.min() + 1e-10)
+        # Normalize to 0-1 with percentile clipping to prevent
+        # extreme outliers from compressing all other scores to ~0
+        lo = np.percentile(scores, 1)
+        hi = np.percentile(scores, 99)
+        scores_clipped = np.clip(scores, lo, hi)
+        scores_norm = (scores_clipped - lo) / (hi - lo + 1e-10)
 
         return scores_norm, labels, model
 
@@ -683,7 +639,7 @@ class AggregatedPyOD:
         """
         Get feature importances for IForest models.
 
-        Only available for algorithm='iforest'. Returns None for LOF/ECOD.
+        Only available for algorithm='iforest'. Returns None for LOF.
 
         Args:
             level: Which level's model to use ('buyers', 'suppliers', 'pairs')

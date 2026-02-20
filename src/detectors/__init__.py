@@ -20,7 +20,7 @@ from .rule_based import RuleBasedDetector, RULE_DEFINITIONS
 from .statistical import StatisticalDetector, benford_test, hhi_index
 
 # Level 3: ML-based (PyOD — IForest + LOF)
-from .pyod_detector import PyODDetector, AggregatedPyOD, compare_algorithms
+from .pyod_detector import PyODDetector, AggregatedPyOD
 
 # Level 4: Network
 from .network import NetworkAnalysisDetector
@@ -39,7 +39,6 @@ __all__ = [
     # Level 3 (PyOD — IForest + LOF)
     "PyODDetector",       # Tender-level IForest
     "AggregatedPyOD",     # Aggregated IForest + LOF (buyer/supplier/pair)
-    "compare_algorithms",
     # Level 4
     "NetworkAnalysisDetector",
     # Ensemble

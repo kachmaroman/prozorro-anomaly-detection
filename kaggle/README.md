@@ -2,12 +2,12 @@
 
 ## Overview
 
-**13.1+ million completed public procurement tenders** from Ukraine's Prozorro transparency system, covering **January 1, 2022 through December 31, 2025**.
+**12.9 million completed public procurement tenders** from Ukraine's Prozorro transparency system, covering **January 1, 2022 through December 31, 2025**.
 
 **Dataset Highlights:**
-- 13.1M+ tenders across 4 years
-- 359K suppliers and 36K buyers
-- 2.6M bids from competitive procedures
+- 12.88M tenders across 4 years
+- 358K suppliers and 36K buyers
+- 2.64M bids from competitive procedures
 - 72K unique bidders (with EDRPOU - joinable with suppliers)
 - Pre-war baseline (Jan-Feb 2022) for comparative analysis
 - Year-based files for memory-efficient analysis
@@ -29,16 +29,16 @@
 
 ```
 prozorro_dataset_clean/
-├── tenders_2022.csv    # 2.4M tenders
-├── tenders_2023.csv    # 3.6M tenders
-├── tenders_2024.csv    # 3.4M tenders
-├── tenders_2025.csv    # 3.7M tenders
-├── bids_2022.csv       # 242K bids
+├── tenders_2022.csv    # 2.39M tenders
+├── tenders_2023.csv    # 3.49M tenders
+├── tenders_2024.csv    # 3.39M tenders
+├── tenders_2025.csv    # 3.61M tenders
+├── bids_2022.csv       # 240K bids
 ├── bids_2023.csv       # 489K bids
 ├── bids_2024.csv       # 847K bids
-├── bids_2025.csv       # 1.1M bids
+├── bids_2025.csv       # 1.06M bids
 ├── buyers.csv          # 36K buyers (16 columns)
-├── suppliers.csv       # 359K suppliers (6 columns)
+├── suppliers.csv       # 358K suppliers (6 columns)
 └── bidders.csv         # 72K bidders (7 columns)
 ```
 
@@ -152,11 +152,11 @@ tenders_enriched = tenders_enriched.merge(suppliers, on='supplier_id', how='left
 
 | Year | Tenders |
 |------|---------|
-| 2022 | 2,401,937 |
-| 2023 | 3,599,565 |
-| 2024 | 3,437,381 |
-| 2025 | 3,657,528 |
-| **Total** | **13,096,411** |
+| 2022 | 2,385,398 |
+| 2023 | 3,491,748 |
+| 2024 | 3,389,960 |
+| 2025 | 3,610,854 |
+| **Total** | **12,877,960** |
 
 ---
 

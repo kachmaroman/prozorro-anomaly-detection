@@ -1,7 +1,7 @@
 """
 Rule-Based Anomaly Detection (Level 1 - Baseline)
 
-Implements 40+ red flags based on:
+Implements 45 red flags based on:
 - Red_Flags_Prozorro.xlsx (36 rules)
 - Additional domain knowledge rules
 
@@ -517,7 +517,7 @@ class RuleBasedDetector:
     """
     Comprehensive rule-based anomaly detector.
 
-    Implements 40+ red flags organized by category:
+    Implements 45 red flags organized by category:
     - Process Quality
     - Competition Quality
     - Price Quality
