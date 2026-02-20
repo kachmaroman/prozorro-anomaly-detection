@@ -1,6 +1,6 @@
 # Anomaly Detection in Ukrainian Public Procurement
 
-Analyzing 13M+ ProZorro tenders for suspicious patterns and potential fraud using rule-based and ML methods.
+Analyzing 12.9M ProZorro tenders (2022–2025) for suspicious patterns using a 5-method ensemble: rules, statistics, Isolation Forest, LOF, and network analysis.
 
 ## Structure
 
@@ -47,14 +47,14 @@ high_risk = detector.get_high_risk()
 ## Methods
 
 ### Rule-Based Detection
-- 44 red flag rules across 6 categories
+- 45 red flag rules across 6 categories
 - Risk scoring (critical/high/medium/low)
-- Based on ProZorro domain expertise
+- Based on OCP methodology and ProZorro domain expertise
 
-### ML Methods (in progress)
-- Isolation Forest
-- Local Outlier Factor
-- Network Analysis
+### ML Methods
+- Isolation Forest (global anomalies, tender + aggregated level)
+- LOF (local anomalies, aggregated level)
+- Network Analysis (cartels, bid rotation, monopolistic pairs)
 
 ## Requirements
 
