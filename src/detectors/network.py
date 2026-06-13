@@ -12,7 +12,7 @@ Author: Roman Kachmar
 import numpy as np
 import pandas as pd
 from typing import Optional, List, Dict, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from collections import defaultdict
 from itertools import combinations
 
