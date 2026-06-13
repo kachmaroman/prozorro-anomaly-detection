@@ -634,7 +634,6 @@ class NetworkAnalysisDetector:
             return []
 
         # Group by community
-        from collections import defaultdict
         communities = defaultdict(set)
         for bidder_id, comm_id in self.cobid_communities.items():
             communities[comm_id].add(bidder_id)
