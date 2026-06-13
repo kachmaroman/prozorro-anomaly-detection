@@ -1005,7 +1005,7 @@ class RuleBasedDetector:
             return df["tender_id"].isin(suspicious_tenders).astype(int)
 
         except Exception as e:
-            # If anything fails, return zeros
+            print(f"Warning: R056 (_check_cobidding_same_winner) failed: {e}")
             return pd.Series(0, index=df.index)
 
     def _check_bid_rotation(self, df: pd.DataFrame) -> pd.Series:
