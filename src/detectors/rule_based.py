@@ -17,6 +17,7 @@ Categories:
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Dict, Tuple
+from collections import defaultdict
 from dataclasses import dataclass, field
 from scipy import stats
 
@@ -962,7 +963,6 @@ class RuleBasedDetector:
             tender_bidders = tender_bidders.merge(tender_winners, on="tender_id", how="left")
 
             # Count co-bidding patterns (check if same winner when 2 bidders)
-            from collections import defaultdict
             pair_wins = defaultdict(lambda: defaultdict(int))
             pair_total = defaultdict(int)
 
