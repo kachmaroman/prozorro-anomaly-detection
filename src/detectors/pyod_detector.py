@@ -186,7 +186,6 @@ class PyODDetector:
         Get feature importances for IForest model.
 
         Computed as mean of individual tree feature importances.
-        Computed as mean of individual tree feature importances.
 
         Returns:
             Dict of {feature_name: importance} sorted by importance descending,
